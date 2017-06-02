@@ -48,6 +48,11 @@ Check out our getting started tutorial on launching your first Kubernetes cluste
   * [Backup Kubernetes resources](/Documentation/kubernetes-on-aws-backup.md)
   * [Restore Kubernetes resources](/contrib/cluster-backup/README.md)
 
+## Install
+Steps:
+* Download from releases page the binary for your operating system.
+* Extract the archive and copy the binary to `/usr/local/bin`.
+
 ## Examples
 
 Generate `cluster.yaml`:
@@ -143,6 +148,16 @@ The various templates are located in the `core/controlplane/config/templates/` a
 
 ```sh
 make build
+```
+
+## Release convention
+The internal convention for tag a release has been set to the following:
+```
+v<upstream-version>-<iflix-version>
+```
+ie.
+```
+v0.9.6-1
 ```
 
 ## Other Resources
