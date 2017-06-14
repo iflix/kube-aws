@@ -184,7 +184,6 @@ coreos:
           content: |
             [Service]
             Environment="ETCD_IMAGE_TAG=v{{.Etcd.Version}}"
-            Environment="ETCD_VERSION=v{{.Etcd.Version}}"
         {{end}}
       enable: true
       command: start
@@ -557,6 +556,7 @@ write_files:
       ETCD_ADVERTISE_CLIENT_URLS=https://$advertised_hostname:2379
       ETCD_LISTEN_PEER_URLS=https://$private_ip:2380
       ETCD_INITIAL_ADVERTISE_PEER_URLS=https://$advertised_hostname:2380" >> /var/run/coreos/etcd-environment
+      ETCD_VERSION={{.Etcd.Version}}
 
   - path: /opt/bin/cfn-etcd-environment
     owner: root:root
