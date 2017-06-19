@@ -8,9 +8,9 @@ Steps:
 ## Release convention
 The internal convention for tag a release has been set to the following:
 ```
-v<upstream-version>-<iflix-version>
+v<upstream-version>-iflix.<iflix-version>
 ```
 ie.
 ```
-v0.9.6-1
+v0.9.6-iflix.1
 ```
