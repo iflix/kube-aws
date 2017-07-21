@@ -38,6 +38,9 @@ func NewDefaultCluster() *Cluster {
 			PodSecurityPolicy{
 				Enabled: false,
 			},
+			DenyEscalatingExec{
+				Enabled: false,
+			},
 		},
 		AuditLog: AuditLog{
 			Enabled: false,
@@ -71,6 +74,7 @@ func NewDefaultCluster() *Cluster {
 		Kube2IamSupport: Kube2IamSupport{
 			Enabled: false,
 		},
+		KubeletOpts: "",
 		LoadBalancer: LoadBalancer{
 			Enabled: false,
 		},
@@ -679,6 +683,7 @@ type Experimental struct {
 	TLSBootstrap                TLSBootstrap                   `yaml:"tlsBootstrap"`
 	EphemeralImageStorage       EphemeralImageStorage          `yaml:"ephemeralImageStorage"`
 	Kube2IamSupport             Kube2IamSupport                `yaml:"kube2IamSupport,omitempty"`
+	KubeletOpts                 string                         `yaml:"kubeletOpts,omitempty"`
 	LoadBalancer                LoadBalancer                   `yaml:"loadBalancer"`
 	TargetGroup                 TargetGroup                    `yaml:"targetGroup"`
 	NodeDrainer                 model.NodeDrainer              `yaml:"nodeDrainer"`
@@ -692,10 +697,15 @@ type Experimental struct {
 }
 
 type Admission struct {
-	PodSecurityPolicy PodSecurityPolicy `yaml:"podSecurityPolicy"`
+	PodSecurityPolicy  PodSecurityPolicy  `yaml:"podSecurityPolicy"`
+	DenyEscalatingExec DenyEscalatingExec `yaml:"denyEscalatingExec"`
 }
 
 type PodSecurityPolicy struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+type DenyEscalatingExec struct {
 	Enabled bool `yaml:"enabled"`
 }
 

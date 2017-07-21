@@ -80,6 +80,9 @@ func TestMainClusterConfig(t *testing.T) {
 				PodSecurityPolicy: controlplane_config.PodSecurityPolicy{
 					Enabled: false,
 				},
+				DenyEscalatingExec: controlplane_config.DenyEscalatingExec{
+					Enabled: false,
+				},
 			},
 			AuditLog: controlplane_config.AuditLog{
 				Enabled: false,
@@ -1130,6 +1133,8 @@ experimental:
   admission:
     podSecurityPolicy:
       enabled: true
+    denyEscalatingExec:
+      enabled: true
   auditLog:
     enabled: true
     maxage: 100
@@ -1151,6 +1156,7 @@ experimental:
     enabled: true
   kube2IamSupport:
     enabled: true
+  kubeletOpts: '--image-gc-low-threshold 60 --image-gc-high-threshold 70'
   loadBalancer:
     enabled: true
     names:
@@ -1214,6 +1220,9 @@ worker:
 							PodSecurityPolicy: controlplane_config.PodSecurityPolicy{
 								Enabled: true,
 							},
+							DenyEscalatingExec: controlplane_config.DenyEscalatingExec{
+								Enabled: true,
+							},
 						},
 						AuditLog: controlplane_config.AuditLog{
 							Enabled: true,
@@ -1250,6 +1259,7 @@ worker:
 						Kube2IamSupport: controlplane_config.Kube2IamSupport{
 							Enabled: true,
 						},
+						KubeletOpts: "--image-gc-low-threshold 60 --image-gc-high-threshold 70",
 						LoadBalancer: controlplane_config.LoadBalancer{
 							Enabled:          true,
 							Names:            []string{"manuallymanagedlb"},
