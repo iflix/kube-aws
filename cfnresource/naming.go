@@ -12,3 +12,12 @@ func ValidateRoleNameLength(clusterName string, nestedStackLogicalName string, m
 	}
 	return nil
 }
+
+func ValidateManagedRoleNameLength(managedIAMRoleName string, region string) error {
+	name := fmt.Sprintf("%s-%s", region, managedIAMRoleName)
+	if len(name) > 64 {
+		limit := 64 - len(name) + len(managedIAMRoleName)
+		return fmt.Errorf("IAM role name(=%s) will be %d characters long. It exceeds the AWS limit of 64 characters: region name(=%s) + managed iam role name(=%s) should be less than or equal to %d", name, len(name), region, managedIAMRoleName, limit)
+	}
+	return nil
+}
