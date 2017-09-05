@@ -39,7 +39,7 @@ coreos:
     reboot-strategy: "off"
   flannel:
     interface: $private_ipv4
-    etcd_cafile: /etc/kubernetes/ssl/ca.pem
+    etcd_cafile: /etc/kubernetes/ssl/etcd-trusted-ca.pem
     etcd_certfile: /etc/kubernetes/ssl/etcd-client.pem
     etcd_keyfile: /etc/kubernetes/ssl/etcd-client-key.pem
 
@@ -230,12 +230,13 @@ coreos:
         After=nvidia-start.service
         {{- end }}
         [Service]
+        EnvironmentFile=/etc/environment
         EnvironmentFile=-/etc/etcd-environment
         EnvironmentFile=-/etc/default/kubelet
         Environment=KUBELET_IMAGE_TAG={{.K8sVer}}
         Environment=KUBELET_IMAGE_URL={{.HyperkubeImage.RktRepoWithoutTag}}
         Environment="RKT_RUN_ARGS=--volume dns,kind=host,source=/etc/resolv.conf {{.HyperkubeImage.Options}}\
-        --set-env=ETCD_CA_CERT_FILE=/etc/kubernetes/ssl/ca.pem \
+        --set-env=ETCD_CA_CERT_FILE=/etc/kubernetes/ssl/etcd-trusted-ca.pem \
         --set-env=ETCD_CERT_FILE=/etc/kubernetes/ssl/etcd-client.pem \
         --set-env=ETCD_KEY_FILE=/etc/kubernetes/ssl/etcd-client-key.pem \
         --mount volume=dns,target=/etc/resolv.conf \
@@ -260,13 +261,13 @@ coreos:
         ExecStartPre=/usr/bin/mkdir -p /opt/cni/bin
         ExecStartPre=/bin/sh -ec "find /etc/kubernetes/manifests /etc/kubernetes/cni/net.d/  -maxdepth 1 -type f | xargs --no-run-if-empty sed -i 's|#ETCD_ENDPOINTS#|${ETCD_ENDPOINTS}|'"
         ExecStartPre=/usr/bin/etcdctl \
-                       --ca-file /etc/kubernetes/ssl/ca.pem \
+                       --ca-file /etc/kubernetes/ssl/etcd-trusted-ca.pem \
                        --key-file /etc/kubernetes/ssl/etcd-client-key.pem \
                        --cert-file /etc/kubernetes/ssl/etcd-client.pem \
                        --endpoints "${ETCD_ENDPOINTS}" \
                        cluster-health
         {{if .UseCalico -}}
-        ExecStartPre=/usr/bin/docker run --rm -e SLEEP=false -v /opt/cni/bin:/host/opt/cni/bin {{ .CalicoCniImage.RepoWithTag }} /install-cni.sh
+        ExecStartPre=/usr/bin/docker run --rm -e SLEEP=false -e KUBERNETES_SERVICE_HOST= -e KUBERNETES_SERVICE_PORT= -v /opt/cni/bin:/host/opt/cni/bin {{ .CalicoCniImage.RepoWithTag }} /install-cni.sh
         {{end -}}
         ExecStart=/usr/lib/coreos/kubelet-wrapper \
         --cni-conf-dir=/etc/kubernetes/cni/net.d \
@@ -282,8 +283,9 @@ coreos:
         {{end}}--allow-privileged=true \
         {{if .NodeStatusUpdateFrequency}}--node-status-update-frequency={{.NodeStatusUpdateFrequency}} \
         {{end}}--pod-manifest-path=/etc/kubernetes/manifests \
-        --cluster-dns={{.DNSServiceIP}} \
-        --cluster-domain=cluster.local \
+        {{ if .KubeDns.NodeLocalResolver }}--cluster-dns=${COREOS_PRIVATE_IPV4} \
+        {{ else }}--cluster-dns={{.DNSServiceIP}} \
+        {{ end }}--cluster-domain=cluster.local \
         --cloud-provider=aws \
         --cert-dir=/etc/kubernetes/ssl \
         {{- if and .Experimental.TLSBootstrap.Enabled .AssetsConfig.HasTLSBootstrapToken }}
@@ -293,8 +295,8 @@ coreos:
         --tls-private-key-file=/etc/kubernetes/ssl/worker-key.pem \
         {{- end }}
         --kubeconfig=/etc/kubernetes/worker-kubeconfig.yaml \
-        {{- if .Gpu.Nvidia.IsEnabledOn .InstanceType }}
-        --feature-gates="Accelerators=true" \
+        {{- if .FeatureGates.Enabled }}
+        --feature-gates="{{.FeatureGates.String}}" \
         {{- end }}
         --require-kubeconfig \
         $KUBELET_OPTS
@@ -381,6 +383,22 @@ coreos:
         RemainAfterExit=true
         ExecStart=/opt/bin/add-to-load-balancers
 {{end}}
+
+{{if .TargetGroup.Enabled}}
+    - name: add-to-target-groups.service
+      enable: true
+      command: start
+      runtime: true
+      content: |
+        [Unit]
+        Description=Add this spot instance to target groups
+        After=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=true
+        ExecStart=/opt/bin/add-to-target-groups
+{{end}}
 {{end}}
 
 {{ if $.ElasticFileSystemID }}
@@ -437,6 +455,7 @@ coreos:
         ExecStop=/bin/true
         ExecStartPre=/bin/sh -c "/usr/bin/systemctl set-environment INSTANCE_ID=$(/usr/bin/curl -s http://169.254.169.254/latest/meta-data/instance-id)"
         ExecStartPre=/bin/sh -c "/usr/bin/systemctl set-environment SECURITY_GROUPS=\"$(/usr/bin/curl -s http://169.254.169.254/latest/meta-data/security-groups | tr '\n' ',')\""
+        {{if not .SpotFleet.Enabled -}}
         ExecStartPre=/bin/sh -c "/usr/bin/systemctl set-environment AUTOSCALINGGROUP=\"$(/usr/bin/docker run --rm --net=host \
           {{.AWSCliImage.RepoWithTag}} aws \
           autoscaling describe-auto-scaling-instances \
@@ -448,20 +467,25 @@ coreos:
           aws autoscaling describe-auto-scaling-groups \
           --auto-scaling-group-name $AUTOSCALINGGROUP --region {{.Region}} \
           --query 'AutoScalingGroups[].LaunchConfigurationName' --output text)\""
+        {{end -}}
         ExecStart=/usr/bin/docker run --rm -t --net=host \
           -v /etc/kubernetes:/etc/kubernetes \
           -v /etc/resolv.conf:/etc/resolv.conf \
           -e INSTANCE_ID=${INSTANCE_ID} \
           -e SECURITY_GROUPS=${SECURITY_GROUPS} \
+          {{if not .SpotFleet.Enabled -}}
           -e AUTOSCALINGGROUP=${AUTOSCALINGGROUP} \
           -e LAUNCHCONFIGURATION=${LAUNCHCONFIGURATION} \
+          {{end -}}
           {{.HyperkubeImage.RepoWithTag}} /bin/bash \
             -ec 'echo "placing labels and annotations with additional AWS parameters."; \
              kctl="/kubectl --server={{.APIEndpointURL}}:443 --kubeconfig=/etc/kubernetes/worker-kubeconfig.yaml"; \
              kctl_label="$kctl label --overwrite nodes/$(hostname)"; \
              kctl_annotate="$kctl annotate --overwrite nodes/$(hostname)"; \
+             {{if not .SpotFleet.Enabled -}}
              $kctl_label kube-aws.coreos.com/autoscalinggroup=${AUTOSCALINGGROUP}; \
              $kctl_label kube-aws.coreos.com/launchconfiguration=${LAUNCHCONFIGURATION}; \
+             {{end -}}
              $kctl_annotate kube-aws.coreos.com/securitygroups=${SECURITY_GROUPS}; \
              echo "done."'
 {{end}}
@@ -678,7 +702,7 @@ write_files:
     permissions: 0755
     owner: root:root
     content: |
-      KUBELET_OPTS=""
+      KUBELET_OPTS="{{.Experimental.KubeletOpts}}"
 
   - path: /etc/kubernetes/cni/docker_opts_cni.env
     content: |
@@ -702,7 +726,7 @@ write_files:
 
 {{ if .ManageCertificates }}
 
-  - path: /etc/kubernetes/ssl/etcd-client.pem{{if .AssetsEncryptionEnabled}}.enc{{end}}
+  - path: /etc/kubernetes/ssl/etcd-client.pem
     encoding: gzip+base64
     content: {{.AssetsConfig.EtcdClientCert}}
 
@@ -710,8 +734,12 @@ write_files:
     encoding: gzip+base64
     content: {{.AssetsConfig.EtcdClientKey}}
 
+  - path: /etc/kubernetes/ssl/etcd-trusted-ca.pem
+    encoding: gzip+base64
+    content: {{.AssetsConfig.EtcdTrustedCA}}
+
 {{ if not .Experimental.TLSBootstrap.Enabled }}
-  - path: /etc/kubernetes/ssl/worker.pem{{if .AssetsEncryptionEnabled}}.enc{{end}}
+  - path: /etc/kubernetes/ssl/worker.pem
     encoding: gzip+base64
     content: {{.AssetsConfig.WorkerCert}}
 
@@ -720,19 +748,10 @@ write_files:
     content: {{.AssetsConfig.WorkerKey}}
 {{ end }}
 
-  - path: /etc/kubernetes/ssl/ca.pem{{if .AssetsEncryptionEnabled}}.enc{{end}}
+  - path: /etc/kubernetes/ssl/ca.pem
     encoding: gzip+base64
     content: {{.AssetsConfig.CACert}}
 
-{{ if .Experimental.Dex.Enabled }}
-  - path: /etc/kubernetes/ssl/dex.pem{{if .AssetsEncryptionEnabled}}.enc{{end}}
-    encoding: gzip+base64
-    content: {{.AssetsConfig.DexCert}}
-
-  - path: /etc/kubernetes/ssl/dex-key.pem{{if .AssetsEncryptionEnabled}}.enc{{end}}
-    encoding: gzip+base64
-    content: {{.AssetsConfig.DexKey}}
-{{ end }}
 {{ end }}
 
 {{ if .AssetsEncryptionEnabled }}
@@ -789,7 +808,7 @@ write_files:
 
       instance_id=$(curl http://169.254.169.254/latest/meta-data/instance-id)
 
-      sudo rkt run \
+      rkt run \
         --volume=ssl,kind=host,source=/etc/kubernetes/ssl,readOnly=false \
         --mount=volume=ssl,target=/etc/kubernetes/ssl \
         --uuid-file-save=/var/run/coreos/tag-spot-instance.uuid \
@@ -807,7 +826,7 @@ write_files:
              --tags '"'"'Key=kubernetes.io/cluster/{{.ClusterName}},Value=""'"'"' '"'"'Key=Name,Value="{{.ClusterName}}-{{.StackName}}-kube-aws-worker"'"'"' '"'"'Key="kube-aws:node-pool:name",Value="{{.NodePoolName}}"'"'"'
            echo done.'
 
-      sudo rkt rm --uuid-file=/var/run/coreos/tag-spot-instance.uuid
+      rkt rm --uuid-file=/var/run/coreos/tag-spot-instance.uuid
 {{if .Experimental.LoadBalancer.Enabled}}
   - path: /opt/bin/add-to-load-balancers
     owner: root:root
@@ -817,7 +836,7 @@ write_files:
 
       instance_id=$(curl http://169.254.169.254/latest/meta-data/instance-id)
 
-      sudo rkt run \
+      rkt run \
         --volume=ssl,kind=host,source=/etc/kubernetes/ssl,readOnly=false \
         --mount=volume=ssl,target=/etc/kubernetes/ssl \
         --uuid-file-save=/var/run/coreos/add-to-load-balancers.uuid \
@@ -829,7 +848,7 @@ write_files:
           -vxec \
           'echo adding this spot instance to load balancers
            instance_id="'$instance_id'"
-           lbs=({{range $i, $lb := .Experimental.LoadBalancer.Names}}"{{$lb}}" {{end}})
+           lbs=({{range $lb := .Experimental.LoadBalancer.Names}}"{{$lb}}" {{end}})
            add_to_lb="/usr/bin/aws --region {{.Region}} elb register-instances-with-load-balancer --instances $instance_id --load-balancer-name"
            for lb in ${lbs[@]}; do
              echo "$lb"
@@ -837,7 +856,39 @@ write_files:
            done
            echo done.'
 
-      sudo rkt rm --uuid-file=/var/run/coreos/add-to-load-balancers.uuid
+      rkt rm --uuid-file=/var/run/coreos/add-to-load-balancers.uuid
+{{end}}
+
+{{if .Experimental.TargetGroup.Enabled}}
+  - path: /opt/bin/add-to-target-groups
+    owner: root:root
+    permissions: 0700
+    content: |
+      #!/bin/bash -e
+
+      instance_id=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+
+      rkt run \
+        --volume=ssl,kind=host,source=/etc/kubernetes/ssl,readOnly=false \
+        --mount=volume=ssl,target=/etc/kubernetes/ssl \
+        --uuid-file-save=/var/run/coreos/add-to-target-groups.uuid \
+        --volume=dns,kind=host,source=/etc/resolv.conf,readOnly=true --mount volume=dns,target=/etc/resolv.conf \
+        --net=host \
+        --trust-keys-from-https \
+        --insecure-options=ondisk \
+        {{.AWSCliImage.Options}}{{.AWSCliImage.RktRepo}} --exec=/bin/bash -- \
+          -vxec \
+          'echo adding this spot instance to target groups
+           instance_id="'$instance_id'"
+           tgs=({{range $tg := .Experimental.TargetGroup.Arns}}"{{$tg}}" {{end}})
+           add_to_tg="/usr/bin/aws --region {{.Region}} elbv2 register-targets --targets Id=$instance_id --target-group-arn"
+           for tg in ${tgs[@]}; do
+             echo "$tg"
+             $add_to_tg "$tg"
+           done
+           echo done.'
+
+      rkt rm --uuid-file=/var/run/coreos/add-to-target-groups.uuid
 {{end}}
 {{end}}
 
@@ -948,7 +999,7 @@ write_files:
           "etcd_endpoints": "#ETCD_ENDPOINTS#",
           "etcd_key_file": "/etc/kubernetes/ssl/etcd-client-key.pem",
           "etcd_cert_file": "/etc/kubernetes/ssl/etcd-client.pem",
-          "etcd_ca_cert_file": "/etc/kubernetes/ssl/ca.pem",
+          "etcd_ca_cert_file": "/etc/kubernetes/ssl/etcd-trusted-ca.pem",
           "log_level": "info",
           "policy": {
             "type": "k8s",

@@ -158,6 +158,13 @@
         "PolicyDocument" :   {
           "Version":"2012-10-17",
           "Statement": [
+                {{range $s := .Controller.IAMConfig.Policy.Statements }}
+                {
+                  "Action": {{toJSON $s.Actions}},
+                  "Effect": {{toJSON $s.Effect}},
+                  "Resource": {{toJSON $s.Resources}}
+                },
+                {{end}}
                 {
                   "Action": "ec2:*",
                   "Effect": "Allow",
@@ -226,16 +233,25 @@
                   "Resource": [ "*" ]
                 },
                 {{end}}
-                {{if .Addons.ClusterAutoscaler.Enabled}}
+                {{if (and .Addons.ClusterAutoscaler.Enabled .Experimental.ClusterAutoscalerSupport.Enabled) }}
                 {
-                "Effect": "Allow",
                   "Action": [
                     "autoscaling:DescribeAutoScalingGroups",
                     "autoscaling:DescribeAutoScalingInstances",
-                    "autoscaling:DescribeTags",
+                    "autoscaling:DescribeTags"
+                  ],
+                  "Effect": "Allow",
+                  "Resource": "*"
+                },
+                {
+                  "Action": [
                     "autoscaling:SetDesiredCapacity",
                     "autoscaling:TerminateInstanceInAutoScalingGroup"
                   ],
+                  "Condition": {
+                    "Null": { "autoscaling:ResourceTag/kubernetes.io/cluster/{{.ClusterName}}": "false" }
+                  },
+                  "Effect": "Allow",
                   "Resource": "*"
                 },
                 {{end}}
@@ -342,6 +358,13 @@
         "PolicyDocument" :   {
           "Version":"2012-10-17",
           "Statement": [
+            {{range $s := .Etcd.IAMConfig.Policy.Statements }}
+            {
+              "Action": {{toJSON $s.Actions}},
+              "Effect": {{toJSON $s.Effect}},
+              "Resource": {{toJSON $s.Resources}}
+            },
+            {{end}}
             {{if .AssetsEncryptionEnabled}}
             {
               "Action" : "kms:Decrypt",
@@ -1526,6 +1549,10 @@
       },
       "Type": "AWS::EC2::VPCGatewayAttachment"
     }
+    {{end}}
+    {{range $n, $r := .ExtraCfnResources}}
+    ,
+    {{quote $n}}: {{toJSON $r}}
     {{end}}
   },
 

@@ -125,7 +125,15 @@ configure() {
 
   rm -rf ./kubeconfig ./credentials ./userdata ./stack-templates ./exported
 
-  ${KUBE_AWS_CMD} render
+  ${KUBE_AWS_CMD} render stack
+  ${KUBE_AWS_CMD} render credentials --generate-ca
+
+  if [ "${EXISTING_CA}" != "" ]; then
+    mv ./credentials/ca-key.pem my-ca-key.pem
+    mv ./credentials/ca.pem my-ca.pem
+    rm -rf ./credentials
+    ${KUBE_AWS_CMD} render credentials --ca-key-path=./my-ca-key.pem --ca-cert-path=./my-ca.pem
+  fi
 
   validate
 
@@ -267,10 +275,27 @@ experimental:
   awsNodeLabels:
     enabled: true
   auditLog:
-    enabled: true
+    enabled: true" >> cluster.yaml
+
+  if [ "${NODE_AUTHORIZER}" != "" -o "${TLS_BOOTSTRAP}" != "" ]; then
+    echo -e "
+  tlsBootstrap:
+    enabled: true" >> cluster.yaml
+  fi
+
+  if [ "${NODE_AUTHORIZER}" != "" ]; then
+    echo -e "
+  nodeAuthorizer:
+    enabled: true" >> cluster.yaml
+  fi
+
+
+  echo -e "
 addons:
   clusterAutoscaler:
-    enabled: true
+    enabled: true" >> cluster.yaml
+
+  echo -e "
 cloudWatchLogging:
   enabled: true
 amazonSsmAgent:

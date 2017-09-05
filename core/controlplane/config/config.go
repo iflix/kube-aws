@@ -6,10 +6,12 @@ package config
 //go:generate gofmt -w files.go
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -21,11 +23,13 @@ import (
 	"github.com/kubernetes-incubator/kube-aws/model"
 	"github.com/kubernetes-incubator/kube-aws/model/derived"
 	"github.com/kubernetes-incubator/kube-aws/netutil"
+	"github.com/kubernetes-incubator/kube-aws/node"
+	"github.com/kubernetes-incubator/kube-aws/plugin/pluginmodel"
 	yaml "gopkg.in/yaml.v2"
 )
 
 const (
-	k8sVer = "v1.7.1_coreos.0"
+	k8sVer = "v1.7.5_coreos.0"
 
 	credentialsDir = "credentials"
 	userDataDir    = "userdata"
@@ -60,9 +64,12 @@ func NewDefaultCluster() *Cluster {
 			Enabled: false,
 		},
 		ClusterAutoscalerSupport: model.ClusterAutoscalerSupport{
-			Enabled: false,
+			Enabled: true,
 		},
 		TLSBootstrap: TLSBootstrap{
+			Enabled: false,
+		},
+		NodeAuthorizer: NodeAuthorizer{
 			Enabled: false,
 		},
 		EphemeralImageStorage: EphemeralImageStorage{
@@ -73,6 +80,7 @@ func NewDefaultCluster() *Cluster {
 		Kube2IamSupport: Kube2IamSupport{
 			Enabled: false,
 		},
+		KubeletOpts: "",
 		LoadBalancer: LoadBalancer{
 			Enabled: false,
 		},
@@ -83,21 +91,13 @@ func NewDefaultCluster() *Cluster {
 			Enabled:      false,
 			DrainTimeout: 5,
 		},
-		Plugins: Plugins{
-			Rbac: Rbac{
-				Enabled: false,
-			},
-		},
-		Dex: model.Dex{
-			Enabled:         false,
-			Url:             "https://dex.example.com",
-			ClientId:        "example-app",
-			Username:        "email",
-			Groups:          "groups",
-			SelfSignedCa:    true,
-			Connectors:      []model.Connector{},
-			StaticClients:   []model.StaticClient{},
-			StaticPasswords: []model.StaticPassword{},
+		Plugins: Plugins{},
+		Oidc: model.Oidc{
+			Enabled:       false,
+			IssuerUrl:     "https://accounts.google.com",
+			ClientId:      "kubernetes",
+			UsernameClaim: "email",
+			GroupsClaim:   "groups",
 		},
 	}
 
@@ -127,26 +127,31 @@ func NewDefaultCluster() *Cluster {
 					interval: 60,
 				},
 			},
+			KubeDns: KubeDns{
+				NodeLocalResolver: false,
+			},
 			CloudFormationStreaming:            true,
 			HyperkubeImage:                     model.Image{Repo: "quay.io/coreos/hyperkube", Tag: k8sVer, RktPullDocker: false},
 			AWSCliImage:                        model.Image{Repo: "quay.io/coreos/awscli", Tag: "master", RktPullDocker: false},
-			CalicoNodeImage:                    model.Image{Repo: "quay.io/calico/node", Tag: "v1.2.1", RktPullDocker: false},
-			CalicoCniImage:                     model.Image{Repo: "quay.io/calico/cni", Tag: "v1.8.3", RktPullDocker: false},
-			CalicoPolicyControllerImage:        model.Image{Repo: "quay.io/calico/kube-policy-controller", Tag: "v0.6.0", RktPullDocker: false},
-			CalicoCtlImage:                     model.Image{Repo: "quay.io/calico/ctl", Tag: "v1.2.1", RktPullDocker: false},
+			CalicoNodeImage:                    model.Image{Repo: "quay.io/calico/node", Tag: "v2.4.1", RktPullDocker: false},
+			CalicoCniImage:                     model.Image{Repo: "quay.io/calico/cni", Tag: "v1.10.0", RktPullDocker: false},
+			CalicoPolicyControllerImage:        model.Image{Repo: "quay.io/calico/kube-policy-controller", Tag: "v0.7.0", RktPullDocker: false},
+			CalicoCtlImage:                     model.Image{Repo: "quay.io/calico/ctl", Tag: "v1.4.0", RktPullDocker: false},
 			ClusterAutoscalerImage:             model.Image{Repo: "gcr.io/google_containers/cluster-autoscaler", Tag: "v0.6.0", RktPullDocker: false},
 			ClusterProportionalAutoscalerImage: model.Image{Repo: "gcr.io/google_containers/cluster-proportional-autoscaler-amd64", Tag: "1.1.2", RktPullDocker: false},
+			Kube2IAMImage:                      model.Image{Repo: "jtblin/kube2iam", Tag: "0.7.0", RktPullDocker: false},
 			KubeDnsImage:                       model.Image{Repo: "gcr.io/google_containers/k8s-dns-kube-dns-amd64", Tag: "1.14.4", RktPullDocker: false},
 			KubeDnsMasqImage:                   model.Image{Repo: "gcr.io/google_containers/k8s-dns-dnsmasq-nanny-amd64", Tag: "1.14.4", RktPullDocker: false},
 			KubeReschedulerImage:               model.Image{Repo: "gcr.io/google-containers/rescheduler", Tag: "v0.3.1", RktPullDocker: false},
 			DnsMasqMetricsImage:                model.Image{Repo: "gcr.io/google_containers/k8s-dns-sidecar-amd64", Tag: "1.14.4", RktPullDocker: false},
 			ExecHealthzImage:                   model.Image{Repo: "gcr.io/google_containers/exechealthz-amd64", Tag: "1.2", RktPullDocker: false},
-			HeapsterImage:                      model.Image{Repo: "gcr.io/google_containers/heapster", Tag: "v1.4.0", RktPullDocker: false},
+			HelmImage:                          model.Image{Repo: "quay.io/kube-aws/helm", Tag: "v2.6.0", RktPullDocker: false},
+			TillerImage:                        model.Image{Repo: "gcr.io/kubernetes-helm/tiller", Tag: "v2.6.0", RktPullDocker: false},
+			HeapsterImage:                      model.Image{Repo: "gcr.io/google_containers/heapster", Tag: "v1.4.1", RktPullDocker: false},
 			AddonResizerImage:                  model.Image{Repo: "gcr.io/google_containers/addon-resizer", Tag: "2.0", RktPullDocker: false},
-			KubeDashboardImage:                 model.Image{Repo: "gcr.io/google_containers/kubernetes-dashboard-amd64", Tag: "v1.6.1", RktPullDocker: false},
+			KubeDashboardImage:                 model.Image{Repo: "gcr.io/google_containers/kubernetes-dashboard-amd64", Tag: "v1.6.3", RktPullDocker: false},
 			PauseImage:                         model.Image{Repo: "gcr.io/google_containers/pause-amd64", Tag: "3.0", RktPullDocker: false},
 			FlannelImage:                       model.Image{Repo: "quay.io/coreos/flannel", Tag: "v0.7.1", RktPullDocker: false},
-			DexImage:                           model.Image{Repo: "quay.io/coreos/dex", Tag: "v2.4.1", RktPullDocker: false},
 			JournaldCloudWatchLogsImage:        model.Image{Repo: "jollinshead/journald-cloudwatch-logs", Tag: "0.1", RktPullDocker: true},
 		},
 		KubeClusterSettings: KubeClusterSettings{
@@ -222,7 +227,7 @@ func ConfigFromBytes(data []byte) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := c.Config()
+	cfg, err := c.Config([]*pluginmodel.Plugin{})
 	if err != nil {
 		return nil, err
 	}
@@ -435,6 +440,7 @@ type DeploymentSettings struct {
 	CloudWatchLogging       `yaml:"cloudWatchLogging,omitempty"`
 	AmazonSsmAgent          `yaml:"amazonSsmAgent,omitempty"`
 	CloudFormationStreaming bool `yaml:"cloudFormationStreaming,omitempty"`
+	KubeDns                 `yaml:"kubeDns,omitempty"`
 
 	// Images repository
 	HyperkubeImage                     model.Image `yaml:"hyperkubeImage,omitempty"`
@@ -445,17 +451,19 @@ type DeploymentSettings struct {
 	CalicoPolicyControllerImage        model.Image `yaml:"calicoPolicyControllerImage,omitempty"`
 	ClusterAutoscalerImage             model.Image `yaml:"clusterAutoscalerImage,omitempty"`
 	ClusterProportionalAutoscalerImage model.Image `yaml:"clusterProportionalAutoscalerImage,omitempty"`
+	Kube2IAMImage                      model.Image `yaml:"kube2iamImage,omitempty"`
 	KubeDnsImage                       model.Image `yaml:"kubeDnsImage,omitempty"`
 	KubeDnsMasqImage                   model.Image `yaml:"kubeDnsMasqImage,omitempty"`
 	KubeReschedulerImage               model.Image `yaml:"kubeReschedulerImage,omitempty"`
 	DnsMasqMetricsImage                model.Image `yaml:"dnsMasqMetricsImage,omitempty"`
 	ExecHealthzImage                   model.Image `yaml:"execHealthzImage,omitempty"`
+	HelmImage                          model.Image `yaml:"helmImage,omitempty"`
+	TillerImage                        model.Image `yaml:"tillerImage,omitempty"`
 	HeapsterImage                      model.Image `yaml:"heapsterImage,omitempty"`
 	AddonResizerImage                  model.Image `yaml:"addonResizerImage,omitempty"`
 	KubeDashboardImage                 model.Image `yaml:"kubeDashboardImage,omitempty"`
 	PauseImage                         model.Image `yaml:"pauseImage,omitempty"`
 	FlannelImage                       model.Image `yaml:"flannelImage,omitempty"`
-	DexImage                           model.Image `yaml:"dexImage,omitempty"`
 	JournaldCloudWatchLogsImage        model.Image `yaml:"journaldCloudWatchLogsImage,omitempty"`
 }
 
@@ -488,6 +496,7 @@ type FlannelSettings struct {
 	PodCIDR string `yaml:"podCIDR,omitempty"`
 }
 
+// Cluster is the container of all the configurable parameters of a kube-aws cluster, customizable via cluster.yaml
 type Cluster struct {
 	KubeClusterSettings    `yaml:",inline"`
 	DeploymentSettings     `yaml:",inline"`
@@ -495,13 +504,14 @@ type Cluster struct {
 	ControllerSettings     `yaml:",inline"`
 	EtcdSettings           `yaml:",inline"`
 	FlannelSettings        `yaml:",inline"`
-	AdminAPIEndpointName   string `yaml:"adminAPIEndpointName,omitempty"`
-	ServiceCIDR            string `yaml:"serviceCIDR,omitempty"`
-	CreateRecordSet        bool   `yaml:"createRecordSet,omitempty"`
-	RecordSetTTL           int    `yaml:"recordSetTTL,omitempty"`
-	TLSCADurationDays      int    `yaml:"tlsCADurationDays,omitempty"`
-	TLSCertDurationDays    int    `yaml:"tlsCertDurationDays,omitempty"`
-	HostedZoneID           string `yaml:"hostedZoneId,omitempty"`
+	AdminAPIEndpointName   string              `yaml:"adminAPIEndpointName,omitempty"`
+	ServiceCIDR            string              `yaml:"serviceCIDR,omitempty"`
+	CreateRecordSet        bool                `yaml:"createRecordSet,omitempty"`
+	RecordSetTTL           int                 `yaml:"recordSetTTL,omitempty"`
+	TLSCADurationDays      int                 `yaml:"tlsCADurationDays,omitempty"`
+	TLSCertDurationDays    int                 `yaml:"tlsCertDurationDays,omitempty"`
+	HostedZoneID           string              `yaml:"hostedZoneId,omitempty"`
+	PluginConfigs          model.PluginConfigs `yaml:"kubeAwsPlugins,omitempty"`
 	ProvidedEncryptService EncryptService
 	// SSHAccessAllowedSourceCIDRs is network ranges of sources you'd like SSH accesses to be allowed from, in CIDR notation
 	SSHAccessAllowedSourceCIDRs model.CIDRRanges       `yaml:"sshAccessAllowedSourceCIDRs,omitempty"`
@@ -519,13 +529,15 @@ type Experimental struct {
 	// a node label and IAM permissions to run cluster-autoscaler
 	ClusterAutoscalerSupport    model.ClusterAutoscalerSupport `yaml:"clusterAutoscalerSupport"`
 	TLSBootstrap                TLSBootstrap                   `yaml:"tlsBootstrap"`
+	NodeAuthorizer              NodeAuthorizer                 `yaml:"nodeAuthorizer"`
 	EphemeralImageStorage       EphemeralImageStorage          `yaml:"ephemeralImageStorage"`
 	Kube2IamSupport             Kube2IamSupport                `yaml:"kube2IamSupport,omitempty"`
+	KubeletOpts                 string                         `yaml:"kubeletOpts,omitempty"`
 	LoadBalancer                LoadBalancer                   `yaml:"loadBalancer"`
 	TargetGroup                 TargetGroup                    `yaml:"targetGroup"`
 	NodeDrainer                 model.NodeDrainer              `yaml:"nodeDrainer"`
 	Plugins                     Plugins                        `yaml:"plugins"`
-	Dex                         model.Dex                      `yaml:"dex"`
+	Oidc                        model.Oidc                     `yaml:"oidc"`
 	DisableSecurityGroupIngress bool                           `yaml:"disableSecurityGroupIngress"`
 	NodeMonitorGracePeriod      string                         `yaml:"nodeMonitorGracePeriod"`
 	model.UnknownKeys           `yaml:",inline"`
@@ -570,6 +582,10 @@ type AwsNodeLabels struct {
 }
 
 type TLSBootstrap struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+type NodeAuthorizer struct {
 	Enabled bool `yaml:"enabled"`
 }
 
@@ -631,11 +647,16 @@ type TargetGroup struct {
 }
 
 type Plugins struct {
-	Rbac Rbac `yaml:"rbac"`
 }
 
-type Rbac struct {
-	Enabled bool `yaml:"enabled"`
+type KubeDns struct {
+	NodeLocalResolver bool `yaml:"nodeLocalResolver"`
+}
+
+func (c *KubeDns) MergeIfEmpty(other KubeDns) {
+	if c.NodeLocalResolver == false {
+		c.NodeLocalResolver = other.NodeLocalResolver
+	}
 }
 
 type WaitSignal struct {
@@ -701,8 +722,22 @@ func (c KubeClusterSettings) K8sNetworkPlugin() string {
 	return "cni"
 }
 
-func (c Cluster) Config() (*Config, error) {
-	config := Config{Cluster: c}
+func (c Cluster) Config(extra ...[]*pluginmodel.Plugin) (*Config, error) {
+	pluginMap := map[string]*pluginmodel.Plugin{}
+	plugins := []*pluginmodel.Plugin{}
+	if len(extra) > 0 {
+		plugins = extra[0]
+		for _, p := range plugins {
+			pluginMap[p.SettingKey()] = p
+		}
+	}
+
+	config := Config{
+		Cluster:          c,
+		KubeAwsPlugins:   pluginMap,
+		APIServerFlags:   pluginmodel.APIServerFlags{},
+		APIServerVolumes: pluginmodel.APIServerVolumes{},
+	}
 
 	if c.AmiId == "" {
 		var err error
@@ -774,18 +809,25 @@ type StackTemplateOptions struct {
 	SkipWait              bool
 }
 
-func (c Cluster) StackConfig(opts StackTemplateOptions) (*StackConfig, error) {
-	var err error
-	stackConfig := StackConfig{}
+func (c Cluster) StackConfig(opts StackTemplateOptions, extra ...[]*pluginmodel.Plugin) (*StackConfig, error) {
+	plugins := []*pluginmodel.Plugin{}
+	if len(extra) > 0 {
+		plugins = extra[0]
+	}
 
-	if stackConfig.Config, err = c.Config(); err != nil {
+	var err error
+	stackConfig := StackConfig{
+		ExtraCfnResources: map[string]interface{}{},
+	}
+
+	if stackConfig.Config, err = c.Config(plugins); err != nil {
 		return nil, err
 	}
 
 	var compactAssets *CompactAssets
 
 	if c.AssetsEncryptionEnabled() {
-		compactAssets, err = ReadOrCreateCompactAssets(opts.AssetsDir, c.ManageCertificates, KMSConfig{
+		compactAssets, err = ReadOrCreateCompactAssets(opts.AssetsDir, c.ManageCertificates, c.Experimental.TLSBootstrap.Enabled, KMSConfig{
 			Region:         stackConfig.Config.Region,
 			KMSKeyARN:      c.KMSKeyARN,
 			EncryptService: c.ProvidedEncryptService,
@@ -796,16 +838,12 @@ func (c Cluster) StackConfig(opts StackTemplateOptions) (*StackConfig, error) {
 
 		stackConfig.Config.AssetsConfig = compactAssets
 	} else {
-		rawAssets, err := ReadOrCreateUnencryptedCompactAssets(opts.AssetsDir, c.ManageCertificates)
+		rawAssets, err := ReadOrCreateUnencryptedCompactAssets(opts.AssetsDir, c.ManageCertificates, c.Experimental.TLSBootstrap.Enabled)
 		if err != nil {
 			return nil, err
 		}
 
 		stackConfig.Config.AssetsConfig = rawAssets
-	}
-
-	if c.Experimental.TLSBootstrap.Enabled && !c.Experimental.Plugins.Rbac.Enabled {
-		fmt.Println(`WARNING: enabling cluster-level TLS bootstrapping without RBAC is not recommended. See https://kubernetes.io/docs/admin/kubelet-tls-bootstrapping/ for more information`)
 	}
 
 	stackConfig.StackTemplateOptions = opts
@@ -819,15 +857,23 @@ func (c Cluster) StackConfig(opts StackTemplateOptions) (*StackConfig, error) {
 	return &stackConfig, nil
 }
 
+// Config contains configuration parameters available when rendering userdata injected into a controller or an etcd node from golang text templates
 type Config struct {
 	Cluster
 
 	AdminAPIEndpoint derived.APIEndpoint
 	APIEndpoints     derived.APIEndpoints
 
+	// EtcdNodes is the golang-representation of etcd nodes, which is used to differentiate unique etcd nodes
+	// This is used to simplify templating of the control-plane stack template.
 	EtcdNodes []derived.EtcdNode
 
 	AssetsConfig *CompactAssets
+
+	KubeAwsPlugins map[string]*pluginmodel.Plugin
+
+	APIServerVolumes pluginmodel.APIServerVolumes
+	APIServerFlags   pluginmodel.APIServerFlags
 }
 
 // StackName returns the logical name of a CloudFormation stack resource in a root stack template
@@ -1024,12 +1070,18 @@ func (c Cluster) validate() error {
 	}
 
 	if len(c.Controller.IAMConfig.Role.Name) > 0 {
-		if e := cfnresource.ValidateManagedRoleNameLength(c.Controller.IAMConfig.Role.Name, c.Region.String()); e != nil {
+		if e := cfnresource.ValidateStableRoleNameLength(c.Controller.IAMConfig.Role.Name, c.Region.String()); e != nil {
 			return e
 		}
 	} else {
-		if e := cfnresource.ValidateRoleNameLength(c.ClusterName, c.NestedStackName(), c.Controller.IAMConfig.Role.Name, c.Region.String()); e != nil {
+		if e := cfnresource.ValidateUnstableRoleNameLength(c.ClusterName, c.NestedStackName(), c.Controller.IAMConfig.Role.Name, c.Region.String()); e != nil {
 			return e
+		}
+	}
+
+	if c.Experimental.NodeAuthorizer.Enabled {
+		if !c.Experimental.TLSBootstrap.Enabled {
+			return fmt.Errorf("TLS bootstrap is required in order to enable the node authorizer")
 		}
 	}
 
@@ -1448,6 +1500,128 @@ func (c *Cluster) ValidateExistingVPC(existingVPCCIDR string, existingSubnetCIDR
 // ManageELBLogicalNames returns all the logical names of the cfn resources corresponding to ELBs managed by kube-aws for API endpoints
 func (c *Config) ManagedELBLogicalNames() []string {
 	return c.APIEndpoints.ManagedELBLogicalNames()
+}
+
+type kubernetesManifestPlugin struct {
+	Manifests []pluggedInKubernetesManifest
+}
+
+func (p kubernetesManifestPlugin) ManifestListFile() node.UploadedFile {
+	paths := []string{}
+	for _, m := range p.Manifests {
+		paths = append(paths, m.ManifestFile.Path)
+	}
+	bytes := []byte(strings.Join(paths, "\n"))
+	return node.UploadedFile{
+		Path:    p.listFilePath(),
+		Content: node.NewUploadedFileContent(bytes),
+	}
+}
+
+func (p kubernetesManifestPlugin) listFilePath() string {
+	return "/srv/kube-aws/plugins/kubernetes-manifests"
+}
+
+func (p kubernetesManifestPlugin) Directory() string {
+	return filepath.Dir(p.listFilePath())
+}
+
+type pluggedInKubernetesManifest struct {
+	ManifestFile node.UploadedFile
+}
+
+type helmReleasePlugin struct {
+	Releases []pluggedInHelmRelease
+}
+
+func (p helmReleasePlugin) ReleaseListFile() node.UploadedFile {
+	paths := []string{}
+	for _, r := range p.Releases {
+		paths = append(paths, r.ReleaseFile.Path)
+	}
+	bytes := []byte(strings.Join(paths, "\n"))
+	return node.UploadedFile{
+		Path:    p.listFilePath(),
+		Content: node.NewUploadedFileContent(bytes),
+	}
+}
+
+func (p helmReleasePlugin) listFilePath() string {
+	return "/srv/kube-aws/plugins/helm-releases"
+}
+
+func (p helmReleasePlugin) Directory() string {
+	return filepath.Dir(p.listFilePath())
+}
+
+type pluggedInHelmRelease struct {
+	ValuesFile  node.UploadedFile
+	ReleaseFile node.UploadedFile
+}
+
+func (c *Config) KubernetesManifestPlugin() kubernetesManifestPlugin {
+	manifests := []pluggedInKubernetesManifest{}
+	for pluginName, _ := range c.PluginConfigs {
+		plugin, ok := c.KubeAwsPlugins[pluginName]
+		if !ok {
+			panic(fmt.Errorf("Plugin %s is requested but not loaded. Probably a typo in the plugin name inside cluster.yaml?", pluginName))
+		}
+		for _, manifestConfig := range plugin.Configuration.Kubernetes.Manifests {
+			bytes := []byte(manifestConfig.Contents.Inline)
+			m := pluggedInKubernetesManifest{
+				ManifestFile: node.UploadedFile{
+					Path:    filepath.Join("/srv/kube-aws/plugins", plugin.Metadata.Name, manifestConfig.Name),
+					Content: node.NewUploadedFileContent(bytes),
+				},
+			}
+			manifests = append(manifests, m)
+		}
+	}
+	p := kubernetesManifestPlugin{
+		Manifests: manifests,
+	}
+	return p
+}
+
+func (c *Config) HelmReleasePlugin() helmReleasePlugin {
+	releases := []pluggedInHelmRelease{}
+	for pluginName, _ := range c.PluginConfigs {
+		plugin := c.KubeAwsPlugins[pluginName]
+		for _, releaseConfig := range plugin.Configuration.Helm.Releases {
+			valuesFilePath := filepath.Join("/srv/kube-aws/plugins", plugin.Metadata.Name, "helm", "releases", releaseConfig.Name, "values.yaml")
+			valuesFileContent, err := json.Marshal(releaseConfig.Values)
+			if err != nil {
+				panic(fmt.Errorf("Unexpected error in HelmReleasePlugin: %v", err))
+			}
+			releaseFileData := map[string]interface{}{
+				"values": map[string]string{
+					"file": valuesFilePath,
+				},
+				"chart": map[string]string{
+					"name":    releaseConfig.Name,
+					"version": releaseConfig.Version,
+				},
+			}
+			releaseFilePath := filepath.Join("/srv/kube-aws/plugins", plugin.Metadata.Name, "helm", "releases", releaseConfig.Name, "release.json")
+			releaseFileContent, err := json.Marshal(releaseFileData)
+			if err != nil {
+				panic(fmt.Errorf("Unexpected error in HelmReleasePlugin: %v", err))
+			}
+			r := pluggedInHelmRelease{
+				ValuesFile: node.UploadedFile{
+					Path:    valuesFilePath,
+					Content: node.NewUploadedFileContent(valuesFileContent),
+				},
+				ReleaseFile: node.UploadedFile{
+					Path:    releaseFilePath,
+					Content: node.NewUploadedFileContent(releaseFileContent),
+				},
+			}
+			releases = append(releases, r)
+		}
+	}
+	p := helmReleasePlugin{}
+	return p
 }
 
 func WithTrailingDot(s string) string {
