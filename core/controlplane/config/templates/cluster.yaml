@@ -1317,6 +1317,8 @@ experimental:
   # This is the amount of time which we allow running Node to be unresponsive before marking it unhealthy.
   # Must be N times more than kubelet's nodeStatusUpdateFrequency (default 10s).
 #   nodeMonitorGracePeriod: "40s"
+#   horizontalPodAutoscalerDownscaleDelay: "5m0s"
+#   horizontalPodAutoscalerUpscaleDelay: "3m0s"
 
 kubelet:
   # Tell Kubelet to renew its certificate as its expiration time is approaching
