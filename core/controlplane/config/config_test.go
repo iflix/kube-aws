@@ -1336,7 +1336,6 @@ func TestWithTrailingDot(t *testing.T) {
 }
 
 func TestHPAConfig(t *testing.T) {
-
 	conf := `
 experimental:
   horizontalPodAutoscalerDownscaleDelay: "3m0s"
