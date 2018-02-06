@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -39,8 +40,10 @@ func TestMainClusterConfig(t *testing.T) {
 		t.FailNow()
 	}
 
+	firstAz := kubeAwsSettings.region + "c"
+
 	hasDefaultEtcdSettings := func(c *config.Config, t *testing.T) {
-		subnet1 := model.NewPublicSubnet("us-west-1c", "10.0.0.0/24")
+		subnet1 := model.NewPublicSubnet(firstAz, "10.0.0.0/24")
 		subnet1.Name = "Subnet0"
 		expected := controlplane_config.EtcdSettings{
 			Etcd: model.Etcd{
@@ -60,7 +63,7 @@ func TestMainClusterConfig(t *testing.T) {
 					IOPS:      0,
 					Ephemeral: false,
 				},
-				Subnets: []model.Subnet{
+				Subnets: model.Subnets{
 					subnet1,
 				},
 			},
@@ -81,7 +84,13 @@ func TestMainClusterConfig(t *testing.T) {
 				PodSecurityPolicy: controlplane_config.PodSecurityPolicy{
 					Enabled: false,
 				},
+				AlwaysPullImages: controlplane_config.AlwaysPullImages{
+					Enabled: false,
+				},
 				DenyEscalatingExec: controlplane_config.DenyEscalatingExec{
+					Enabled: false,
+				},
+				Priority: controlplane_config.Priority{
 					Enabled: false,
 				},
 			},
@@ -131,7 +140,6 @@ func TestMainClusterConfig(t *testing.T) {
 				Enabled:      false,
 				DrainTimeout: 5,
 			},
-			Plugins: controlplane_config.Plugins{},
 		}
 
 		actual := c.Experimental
@@ -381,10 +389,9 @@ func TestMainClusterConfig(t *testing.T) {
 	}
 
 	mainClusterYaml := kubeAwsSettings.mainClusterYaml()
-	minimalValidConfigYaml := mainClusterYaml + `
-availabilityZone: us-west-1c
-`
-	configYamlWithoutExernalDNSName := kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+	minimalValidConfigYaml := kubeAwsSettings.minimumValidClusterYamlWithAZ("c")
+
+	configYamlWithoutExernalDNSName := kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 availabilityZone: us-west-1c
 `
 
@@ -402,6 +409,8 @@ addons:
     enabled: true
   clusterAutoscaler:
     enabled: true
+  metricsServer:
+    enabled: true
 worker:
   nodePools:
   - name: pool1
@@ -415,6 +424,9 @@ worker:
 							Enabled: true,
 						},
 						ClusterAutoscaler: model.ClusterAutoscalerSupport{
+							Enabled: true,
+						},
+						MetricsServer: model.MetricsServer{
 							Enabled: true,
 						},
 					}
@@ -513,22 +525,60 @@ apiEndpoints:
 			},
 		},
 		{
-			context: "WithAPIEndpointLBAPIAccessAllowedSourceCIDRsEmptied",
-			configYaml: configYamlWithoutExernalDNSName + `
-apiEndpoints:
-- name: default
-  dnsName: k8s.example.com
-  loadBalancer:
-    apiAccessAllowedSourceCIDRs:
-    hostedZone:
-      id: a1b2c4
+			context:    "WithKubeProxyIPVSModeDisabledByDefault",
+			configYaml: minimalValidConfigYaml,
+			assertConfig: []ConfigTester{
+				func(c *config.Config, t *testing.T) {
+					if c.KubeProxy.IPVSMode.Enabled != false {
+						t.Errorf("kube-proxy IPVS mode must be disabled by default")
+					}
+
+					expectedScheduler := "rr"
+					if c.KubeProxy.IPVSMode.Scheduler != expectedScheduler {
+						t.Errorf("IPVS scheduler should be by default set to: %s (actual = %s)", expectedScheduler, c.KubeProxy.IPVSMode.Scheduler)
+					}
+
+					expectedSyncPeriod := "60s"
+					if c.KubeProxy.IPVSMode.SyncPeriod != expectedSyncPeriod {
+						t.Errorf("Sync period should be by default set to: %s (actual = %s)", expectedSyncPeriod, c.KubeProxy.IPVSMode.SyncPeriod)
+					}
+
+					expectedMinSyncPeriod := "10s"
+					if c.KubeProxy.IPVSMode.MinSyncPeriod != expectedMinSyncPeriod {
+						t.Errorf("Minimal sync period should be by default set to: %s (actual = %s)", expectedMinSyncPeriod, c.KubeProxy.IPVSMode.MinSyncPeriod)
+					}
+				},
+			},
+		},
+		{
+			context: "WithKubeProxyIPVSModeEnabled",
+			configYaml: minimalValidConfigYaml + `
+kubeProxy:
+  ipvsMode:
+    enabled: true
+    scheduler: lc
+    syncPeriod: 90s
+    minSyncPeriod: 15s
 `,
 			assertConfig: []ConfigTester{
 				func(c *config.Config, t *testing.T) {
-					l := len(c.APIEndpointConfigs[0].LoadBalancer.APIAccessAllowedSourceCIDRs)
-					if l != 0 {
-						t.Errorf("unexpected size of apiEndpoints[0].loadBalancer.apiAccessAllowedSourceCIDRs: %d", l)
-						t.FailNow()
+					if c.KubeProxy.IPVSMode.Enabled != true {
+						t.Errorf("kube-proxy IPVS mode must be enabled")
+					}
+
+					expectedScheduler := "lc"
+					if c.KubeProxy.IPVSMode.Scheduler != expectedScheduler {
+						t.Errorf("IPVS scheduler should be set to: %s (actual = %s)", expectedScheduler, c.KubeProxy.IPVSMode.Scheduler)
+					}
+
+					expectedSyncPeriod := "90s"
+					if c.KubeProxy.IPVSMode.SyncPeriod != expectedSyncPeriod {
+						t.Errorf("Sync period should be set to: %s (actual = %s)", expectedSyncPeriod, c.KubeProxy.IPVSMode.SyncPeriod)
+					}
+
+					expectedMinSyncPeriod := "15s"
+					if c.KubeProxy.IPVSMode.MinSyncPeriod != expectedMinSyncPeriod {
+						t.Errorf("Minimal sync period should be set to: %s (actual = %s)", expectedMinSyncPeriod, c.KubeProxy.IPVSMode.MinSyncPeriod)
 					}
 				},
 			},
@@ -587,7 +637,7 @@ releaseChannel: stable
 worker:
   nodePools:
   - name: pool1
-    releaseChanel: alpha
+    releaseChannel: alpha
 `,
 			assertConfig: []ConfigTester{
 				hasDefaultEtcdSettings,
@@ -606,8 +656,8 @@ worker:
 						t.Error("the AMI ID for the node pool should not be empty but it was")
 					}
 
-					if cp != np {
-						t.Errorf("the default AMI ID and the AMI ID for the node pool didn't match: default=%s, nodepool=%s", cp, np)
+					if cp == np {
+						t.Errorf("the default AMI ID and the AMI ID for the node pool should not match but they did: default=%s, nodepool=%s", cp, np)
 					}
 				},
 			},
@@ -697,7 +747,7 @@ etcd:
 `,
 			assertConfig: []ConfigTester{
 				func(c *config.Config, t *testing.T) {
-					subnet1 := model.NewPublicSubnet("us-west-1c", "10.0.0.0/24")
+					subnet1 := model.NewPublicSubnet(firstAz, "10.0.0.0/24")
 					subnet1.Name = "Subnet0"
 					expected := controlplane_config.EtcdSettings{
 						Etcd: model.Etcd{
@@ -720,7 +770,7 @@ etcd:
 								IOPS:      0,
 								Ephemeral: false,
 							},
-							Subnets: []model.Subnet{
+							Subnets: model.Subnets{
 								subnet1,
 							},
 						},
@@ -754,7 +804,7 @@ etcd:
 `,
 			assertConfig: []ConfigTester{
 				func(c *config.Config, t *testing.T) {
-					subnet1 := model.NewPublicSubnet("us-west-1c", "10.0.0.0/24")
+					subnet1 := model.NewPublicSubnet(firstAz, "10.0.0.0/24")
 					subnet1.Name = "Subnet0"
 					expected := controlplane_config.EtcdSettings{
 						Etcd: model.Etcd{
@@ -777,7 +827,7 @@ etcd:
 							Cluster: model.EtcdCluster{
 								MemberIdentityProvider: "eni",
 							},
-							Subnets: []model.Subnet{
+							Subnets: model.Subnets{
 								subnet1,
 							},
 						},
@@ -812,7 +862,7 @@ etcd:
 `,
 			assertConfig: []ConfigTester{
 				func(c *config.Config, t *testing.T) {
-					subnet1 := model.NewPublicSubnet("us-west-1c", "10.0.0.0/24")
+					subnet1 := model.NewPublicSubnet(firstAz, "10.0.0.0/24")
 					subnet1.Name = "Subnet0"
 					expected := controlplane_config.EtcdSettings{
 						Etcd: model.Etcd{
@@ -835,7 +885,7 @@ etcd:
 								Type:      "gp2",
 								IOPS:      0,
 								Ephemeral: false,
-							}, Subnets: []model.Subnet{
+							}, Subnets: model.Subnets{
 								subnet1,
 							},
 						},
@@ -874,7 +924,7 @@ etcd:
 `,
 			assertConfig: []ConfigTester{
 				func(c *config.Config, t *testing.T) {
-					subnet1 := model.NewPublicSubnet("us-west-1c", "10.0.0.0/24")
+					subnet1 := model.NewPublicSubnet(firstAz, "10.0.0.0/24")
 					subnet1.Name = "Subnet0"
 					expected := controlplane_config.EtcdSettings{
 						Etcd: model.Etcd{
@@ -909,7 +959,7 @@ etcd:
 									FQDN: "etcd1c.internal.example.com",
 								},
 							},
-							Subnets: []model.Subnet{
+							Subnets: model.Subnets{
 								subnet1,
 							},
 						},
@@ -948,7 +998,7 @@ etcd:
 `,
 			assertConfig: []ConfigTester{
 				func(c *config.Config, t *testing.T) {
-					subnet1 := model.NewPublicSubnet("us-west-1c", "10.0.0.0/24")
+					subnet1 := model.NewPublicSubnet(firstAz, "10.0.0.0/24")
 					subnet1.Name = "Subnet0"
 					expected := controlplane_config.EtcdSettings{
 						Etcd: model.Etcd{
@@ -983,7 +1033,7 @@ etcd:
 									Name: "etcd1c",
 								},
 							},
-							Subnets: []model.Subnet{
+							Subnets: model.Subnets{
 								subnet1,
 							},
 						},
@@ -1023,7 +1073,7 @@ etcd:
 `,
 			assertConfig: []ConfigTester{
 				func(c *config.Config, t *testing.T) {
-					subnet1 := model.NewPublicSubnet("us-west-1c", "10.0.0.0/24")
+					subnet1 := model.NewPublicSubnet(firstAz, "10.0.0.0/24")
 					subnet1.Name = "Subnet0"
 					manageRecordSets := false
 					expected := controlplane_config.EtcdSettings{
@@ -1060,7 +1110,7 @@ etcd:
 									Name: "etcd1c",
 								},
 							},
-							Subnets: []model.Subnet{
+							Subnets: model.Subnets{
 								subnet1,
 							},
 						},
@@ -1101,7 +1151,7 @@ etcd:
 `,
 			assertConfig: []ConfigTester{
 				func(c *config.Config, t *testing.T) {
-					subnet1 := model.NewPublicSubnet("us-west-1c", "10.0.0.0/24")
+					subnet1 := model.NewPublicSubnet(firstAz, "10.0.0.0/24")
 					subnet1.Name = "Subnet0"
 					expected := controlplane_config.EtcdSettings{
 						Etcd: model.Etcd{
@@ -1137,7 +1187,7 @@ etcd:
 									Name: "etcd1c",
 								},
 							},
-							Subnets: []model.Subnet{
+							Subnets: model.Subnets{
 								subnet1,
 							},
 						},
@@ -1171,6 +1221,10 @@ experimental:
     podSecurityPolicy:
       enabled: true
     denyEscalatingExec:
+      enabled: true
+    alwaysPullImages:
+      enabled: true
+    priority:
       enabled: true
   auditLog:
     enabled: true
@@ -1215,9 +1269,6 @@ experimental:
   nodeDrainer:
     enabled: true
     drainTimeout: 3
-  plugins:
-    rbac:
-      enabled: true
 cloudWatchLogging:
   enabled: true
 amazonSsmAgent:
@@ -1235,7 +1286,13 @@ worker:
 							PodSecurityPolicy: controlplane_config.PodSecurityPolicy{
 								Enabled: true,
 							},
+							AlwaysPullImages: controlplane_config.AlwaysPullImages{
+								Enabled: true,
+							},
 							DenyEscalatingExec: controlplane_config.DenyEscalatingExec{
+								Enabled: true,
+							},
+							Priority: controlplane_config.Priority{
 								Enabled: true,
 							},
 						},
@@ -1296,7 +1353,6 @@ worker:
 							Enabled:      true,
 							DrainTimeout: 3,
 						},
-						Plugins: controlplane_config.Plugins{},
 					}
 
 					actual := c.Experimental
@@ -1309,10 +1365,28 @@ worker:
 					if reflect.DeepEqual(expected, p.Experimental) {
 						t.Errorf("experimental settings shouldn't be inherited to a node pool but it did : toplevel=%v nodepool=%v", expected, p.Experimental)
 					}
+
 				},
 			},
 			assertCluster: []ClusterTester{
 				hasDefaultCluster,
+				func(c root.Cluster, t *testing.T) {
+					cp := c.ControlPlane()
+					controllerUserdataS3Part := cp.UserDataController.Parts[model.USERDATA_S3].Asset.Content
+					if !strings.Contains(controllerUserdataS3Part, `--feature-gates=PodPriority=true`) {
+						t.Error("missing controller feature gate: PodPriority=true")
+					}
+
+					if !strings.Contains(controllerUserdataS3Part, `scheduling.k8s.io/v1alpha1=true`) {
+						t.Error("missing controller runtime config: scheduling.k8s.io/v1alpha1=true")
+					}
+
+					re, _ := regexp.Compile("--admission-control=[a-zA-z,]*,Priority")
+					if len(re.FindString(controllerUserdataS3Part)) == 0 {
+						t.Error("missing controller --admission-control config: Priority")
+					}
+
+				},
 			},
 		},
 		{
@@ -1642,7 +1716,7 @@ worker:
 		},
 		{
 			context: "WithMultiAPIEndpoints",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 vpc:
   id: vpc-1a2b3c4d
 internetGateway:
@@ -1726,6 +1800,12 @@ apiEndpoints:
       id: hostedzone-private
 - name: addedToCertCommonNames
   dnsName: api-alt.example.com
+  loadBalancer:
+    managed: false
+- name: elbOnly
+  dnsName: registerme.example.com
+  loadBalancer:
+    recordSetManaged: false
 `,
 			assertCluster: []ClusterTester{
 				func(rootCluster root.Cluster, t *testing.T) {
@@ -1743,7 +1823,7 @@ apiEndpoints:
 					public2 := model.NewPublicSubnet("us-west-1b", "10.0.4.0/24")
 					public2.Name = "publicSubnet2"
 
-					subnets := []model.Subnet{
+					subnets := model.Subnets{
 						private1,
 						private2,
 						public1,
@@ -1753,12 +1833,12 @@ apiEndpoints:
 						t.Errorf("Managed subnets didn't match: expected=%+v actual=%+v", subnets, c.AllSubnets())
 					}
 
-					publicSubnets := []model.Subnet{
+					publicSubnets := model.Subnets{
 						public1,
 						public2,
 					}
 
-					privateSubnets := []model.Subnet{
+					privateSubnets := model.Subnets{
 						private1,
 						private2,
 					}
@@ -1770,6 +1850,7 @@ apiEndpoints:
 					versionedPublicAlt := c.APIEndpoints["versionedPublicAlt"]
 					versionedPrivateAlt := c.APIEndpoints["versionedPrivateAlt"]
 					addedToCertCommonNames := c.APIEndpoints["addedToCertCommonNames"]
+					elbOnly := c.APIEndpoints["elbOnly"]
 
 					if len(unversionedPublic.LoadBalancer.Subnets) != 0 {
 						t.Errorf("unversionedPublic: subnets shuold be empty but was not: actual=%+v", unversionedPublic.LoadBalancer.Subnets)
@@ -1785,15 +1866,15 @@ apiEndpoints:
 						t.Errorf("unversionedPrivate: it should be enabled as the lb to which controller nodes are added, but it was not: loadBalancer=%+v", unversionedPrivate.LoadBalancer)
 					}
 
-					if !reflect.DeepEqual(versionedPublic.LoadBalancer.Subnets, []model.Subnet{public1}) {
-						t.Errorf("versionedPublic: subnets didn't match: expected=%+v actual=%+v", []model.Subnet{public1}, versionedPublic.LoadBalancer.Subnets)
+					if !reflect.DeepEqual(versionedPublic.LoadBalancer.Subnets, model.Subnets{public1}) {
+						t.Errorf("versionedPublic: subnets didn't match: expected=%+v actual=%+v", model.Subnets{public1}, versionedPublic.LoadBalancer.Subnets)
 					}
 					if !versionedPublic.LoadBalancer.Enabled() {
 						t.Errorf("versionedPublic: it should be enabled as the lb to which controller nodes are added, but it was not: loadBalancer=%+v", versionedPublic.LoadBalancer)
 					}
 
-					if !reflect.DeepEqual(versionedPrivate.LoadBalancer.Subnets, []model.Subnet{private1}) {
-						t.Errorf("versionedPrivate: subnets didn't match: expected=%+v actual=%+v", []model.Subnet{private1}, versionedPrivate.LoadBalancer.Subnets)
+					if !reflect.DeepEqual(versionedPrivate.LoadBalancer.Subnets, model.Subnets{private1}) {
+						t.Errorf("versionedPrivate: subnets didn't match: expected=%+v actual=%+v", model.Subnets{private1}, versionedPrivate.LoadBalancer.Subnets)
 					}
 					if !versionedPrivate.LoadBalancer.Enabled() {
 						t.Errorf("versionedPrivate: it should be enabled as the lb to which controller nodes are added, but it was not: loadBalancer=%+v", versionedPrivate.LoadBalancer)
@@ -1814,165 +1895,28 @@ apiEndpoints:
 					}
 
 					if len(addedToCertCommonNames.LoadBalancer.Subnets) != 0 {
-						t.Errorf("addedToCertCommonNames: subnets shuold be empty but was not: actual=%+v", addedToCertCommonNames.LoadBalancer.Subnets)
+						t.Errorf("addedToCertCommonNames: subnets should be empty but was not: actual=%+v", addedToCertCommonNames.LoadBalancer.Subnets)
 					}
 					if addedToCertCommonNames.LoadBalancer.Enabled() {
 						t.Errorf("addedToCertCommonNames: it should not be enabled as the lb to which controller nodes are added, but it was: loadBalancer=%+v", addedToCertCommonNames.LoadBalancer)
 					}
 
-					if !reflect.DeepEqual(c.ExternalDNSNames(), []string{"api-alt.example.com", "api.example.com", "api.internal.example.com", "v1api.example.com", "v1api.internal.example.com", "v1apialt.example.com", "v1apialt.internal.example.com"}) {
+					if !reflect.DeepEqual(elbOnly.LoadBalancer.Subnets, publicSubnets) {
+						t.Errorf("elbOnly: subnets didn't match: expected=%+v actual=%+v", publicSubnets, elbOnly.LoadBalancer.Subnets)
+					}
+					if !elbOnly.LoadBalancer.Enabled() {
+						t.Errorf("elbOnly: it should be enabled but it was not: loadBalancer=%+v", elbOnly.LoadBalancer)
+					}
+					if elbOnly.LoadBalancer.ManageELBRecordSet() {
+						t.Errorf("elbOnly: record set should not be managed but it was: loadBalancer=%+v", elbOnly.LoadBalancer)
+					}
+
+					if !reflect.DeepEqual(c.ExternalDNSNames(), []string{"api-alt.example.com", "api.example.com", "api.internal.example.com", "registerme.example.com", "v1api.example.com", "v1api.internal.example.com", "v1apialt.example.com", "v1apialt.internal.example.com"}) {
 						t.Errorf("unexpected external DNS names: %s", strings.Join(c.ExternalDNSNames(), ", "))
 					}
 
-					if !reflect.DeepEqual(c.APIEndpoints.ManagedELBLogicalNames(), []string{"APIEndpointVersionedPrivateAltELB", "APIEndpointVersionedPrivateELB", "APIEndpointVersionedPublicAltELB", "APIEndpointVersionedPublicELB"}) {
+					if !reflect.DeepEqual(c.APIEndpoints.ManagedELBLogicalNames(), []string{"APIEndpointElbOnlyELB", "APIEndpointVersionedPrivateAltELB", "APIEndpointVersionedPrivateELB", "APIEndpointVersionedPublicAltELB", "APIEndpointVersionedPublicELB"}) {
 						t.Errorf("unexpected managed ELB logical names: %s", strings.Join(c.APIEndpoints.ManagedELBLogicalNames(), ", "))
-					}
-				},
-			},
-		},
-		{
-			context: "WithNetworkTopologyAllPreconfiguredPrivateDeprecated",
-			configYaml: mainClusterYaml + `
-vpc:
-  id: vpc-1a2b3c4d
-# This, in combination with mapPublicIPs=false, implies that the route table contains a route to a preconfigured NAT gateway
-# See https://github.com/kubernetes-incubator/kube-aws/pull/284#issuecomment-276008202
-routeTableId: rtb-1a2b3c4d
-# This means that all the subnets created by kube-aws should be private
-mapPublicIPs: false
-subnets:
-- availabilityZone: us-west-1a
-  instanceCIDR: "10.0.1.0/24"
-  # implies
-  # private: true
-  # routeTable
-  #   id: rtb-1a2b3c4d
-- availabilityZone: us-west-1b
-  instanceCIDR: "10.0.2.0/24"
-  # implies
-  # private: true
-  # routeTable
-  #   id: rtb-1a2b3c4d
-`,
-			assertConfig: []ConfigTester{
-				hasDefaultExperimentalFeatures,
-				hasNoNGWsOrEIPsOrRoutes,
-				func(c *config.Config, t *testing.T) {
-					private1 := model.NewPrivateSubnetWithPreconfiguredRouteTable("us-west-1a", "10.0.1.0/24", "rtb-1a2b3c4d")
-					private1.Name = "Subnet0"
-
-					private2 := model.NewPrivateSubnetWithPreconfiguredRouteTable("us-west-1b", "10.0.2.0/24", "rtb-1a2b3c4d")
-					private2.Name = "Subnet1"
-
-					subnets := []model.Subnet{
-						private1,
-						private2,
-					}
-					if !reflect.DeepEqual(c.AllSubnets(), subnets) {
-						t.Errorf("Managed subnets didn't match: expected=%+v actual=%+v", subnets, c.AllSubnets())
-					}
-
-					privateSubnets := []model.Subnet{
-						private1,
-						private2,
-					}
-					if !reflect.DeepEqual(c.Controller.Subnets, privateSubnets) {
-						t.Errorf("Controller subnets didn't match: expected=%+v actual=%+v", privateSubnets, c.Controller.Subnets)
-					}
-					if !reflect.DeepEqual(c.Controller.LoadBalancer.Subnets, privateSubnets) {
-						t.Errorf("Controller loadbalancer subnets didn't match: expected=%+v actual=%+v", privateSubnets, c.Controller.LoadBalancer.Subnets)
-					}
-					if !reflect.DeepEqual(c.Etcd.Subnets, privateSubnets) {
-						t.Errorf("Etcd subnets didn't match: expected=%+v actual=%+v", privateSubnets, c.Etcd.Subnets)
-					}
-
-					for i, s := range c.PrivateSubnets() {
-						if s.ManageNATGateway() {
-							t.Errorf("NAT gateway for the private subnet #%d is externally managed and shouldn't created by kube-aws", i)
-						}
-
-						if s.ManageRouteToInternet() {
-							t.Errorf("Route to IGW shouldn't be created for a private subnet: %+v", s)
-						}
-					}
-
-					if len(c.PublicSubnets()) != 0 {
-						t.Errorf("Number of public subnets should be zero but it wasn't: %d", len(c.PublicSubnets()))
-					}
-				},
-			},
-		},
-		{
-			context: "WithNetworkTopologyAllPreconfiguredPublicDeprecated",
-			configYaml: mainClusterYaml + `
-vpc:
-  id: vpc-1a2b3c4d
-# This, in combination with mapPublicIPs=true, implies that the route table contains a route to a preconfigured internet gateway
-# See https://github.com/kubernetes-incubator/kube-aws/pull/284#issuecomment-276008202
-routeTableId: rtb-1a2b3c4d
-# This means that all the subnets created by kube-aws should be public
-mapPublicIPs: true
-# internetGateway.id should be omitted as we assume that the route table specified by routeTableId already contain a route to one
-#internetGateway:
-#  id:
-subnets:
-- availabilityZone: us-west-1a
-  instanceCIDR: "10.0.1.0/24"
-  # #implies
-  # private: false
-  # routeTable
-  #   id: rtb-1a2b3c4d
-- availabilityZone: us-west-1b
-  instanceCIDR: "10.0.2.0/24"
-  # #implies
-  # private: false
-  # routeTable
-  #   id: rtb-1a2b3c4d
-`,
-			assertConfig: []ConfigTester{
-				hasDefaultExperimentalFeatures,
-				hasNoNGWsOrEIPsOrRoutes,
-				func(c *config.Config, t *testing.T) {
-					private1 := model.NewPublicSubnetWithPreconfiguredRouteTable("us-west-1a", "10.0.1.0/24", "rtb-1a2b3c4d")
-					private1.Name = "Subnet0"
-
-					private2 := model.NewPublicSubnetWithPreconfiguredRouteTable("us-west-1b", "10.0.2.0/24", "rtb-1a2b3c4d")
-					private2.Name = "Subnet1"
-
-					subnets := []model.Subnet{
-						private1,
-						private2,
-					}
-					if !reflect.DeepEqual(c.AllSubnets(), subnets) {
-						t.Errorf("Managed subnets didn't match: expected=%+v actual=%+v", subnets, c.AllSubnets())
-					}
-
-					publicSubnets := []model.Subnet{
-						private1,
-						private2,
-					}
-					if !reflect.DeepEqual(c.Controller.Subnets, publicSubnets) {
-						t.Errorf("Controller subnets didn't match: expected=%+v actual=%+v", publicSubnets, c.Controller.Subnets)
-					}
-					if !reflect.DeepEqual(c.Controller.LoadBalancer.Subnets, publicSubnets) {
-						t.Errorf("Controller loadbalancer subnets didn't match: expected=%+v actual=%+v", publicSubnets, c.Controller.LoadBalancer.Subnets)
-					}
-					if !reflect.DeepEqual(c.Etcd.Subnets, publicSubnets) {
-						t.Errorf("Etcd subnets didn't match: expected=%+v actual=%+v", publicSubnets, c.Etcd.Subnets)
-					}
-
-					for i, s := range c.PublicSubnets() {
-						if s.RouteTableID() != "rtb-1a2b3c4d" {
-							t.Errorf("Subnet %d should be associated to a route table with an IGW preconfigured but it wasn't", i)
-						}
-
-						if s.ManageRouteToInternet() {
-							t.Errorf("Route to IGW shouldn't be created for a public subnet with a preconfigured IGW: %+v", s)
-						}
-					}
-
-					if len(c.PrivateSubnets()) != 0 {
-						t.Errorf("Number of private subnets should be zero but it wasn't: %d", len(c.PrivateSubnets()))
 					}
 				},
 			},
@@ -2039,7 +1983,7 @@ worker:
 					public2 := model.NewPublicSubnet("us-west-1b", "10.0.4.0/24")
 					public2.Name = "public2"
 
-					subnets := []model.Subnet{
+					subnets := model.Subnets{
 						private1,
 						private2,
 						public1,
@@ -2049,11 +1993,11 @@ worker:
 						t.Errorf("Managed subnets didn't match: expected=%v actual=%v", subnets, c.AllSubnets())
 					}
 
-					publicSubnets := []model.Subnet{
+					publicSubnets := model.Subnets{
 						public1,
 						public2,
 					}
-					importedPublicSubnets := []model.Subnet{
+					importedPublicSubnets := model.Subnets{
 						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
 						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
 					}
@@ -2063,7 +2007,7 @@ worker:
 						t.Errorf("Worker subnets didn't match: expected=%v actual=%v", importedPublicSubnets, p.Subnets)
 					}
 
-					privateSubnets := []model.Subnet{
+					privateSubnets := model.Subnets{
 						private1,
 						private2,
 					}
@@ -2132,7 +2076,7 @@ subnets:
 					public2 := model.NewPublicSubnet("us-west-1b", "10.0.4.0/24")
 					public2.Name = "public2"
 
-					subnets := []model.Subnet{
+					subnets := model.Subnets{
 						private1,
 						private2,
 						public1,
@@ -2142,7 +2086,7 @@ subnets:
 						t.Errorf("Managed subnets didn't match: expected=%v actual=%v", subnets, c.AllSubnets())
 					}
 
-					publicSubnets := []model.Subnet{
+					publicSubnets := model.Subnets{
 						public1,
 						public2,
 					}
@@ -2228,7 +2172,7 @@ worker:
 					public2 := model.NewPublicSubnet("us-west-1b", "10.0.4.0/24")
 					public2.Name = "public2"
 
-					subnets := []model.Subnet{
+					subnets := model.Subnets{
 						private1,
 						private2,
 						public1,
@@ -2238,7 +2182,7 @@ worker:
 						t.Errorf("Managed subnets didn't match: expected=%v actual=%v", subnets, c.AllSubnets())
 					}
 
-					importedPublicSubnets := []model.Subnet{
+					importedPublicSubnets := model.Subnets{
 						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
 						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
 					}
@@ -2247,7 +2191,7 @@ worker:
 						t.Errorf("Worker subnets didn't match: expected=%v actual=%v", importedPublicSubnets, p.Subnets)
 					}
 
-					privateSubnets := []model.Subnet{
+					privateSubnets := model.Subnets{
 						private1,
 						private2,
 					}
@@ -2329,21 +2273,21 @@ worker:
 					public2 := model.NewPublicSubnet("us-west-1b", "10.0.4.0/24")
 					public2.Name = "public2"
 
-					subnets := []model.Subnet{
+					subnets := model.Subnets{
 						private1,
 						private2,
 						public1,
 						public2,
 					}
-					publicSubnets := []model.Subnet{
+					publicSubnets := model.Subnets{
 						public1,
 						public2,
 					}
-					privateSubnets := []model.Subnet{
+					privateSubnets := model.Subnets{
 						private1,
 						private2,
 					}
-					importedPublicSubnets := []model.Subnet{
+					importedPublicSubnets := model.Subnets{
 						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
 						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
 					}
@@ -2427,17 +2371,17 @@ worker:
 					public2 := model.NewImportedPublicSubnet("us-west-1b", "mycluster-public-subnet-1")
 					public2.Name = "public2"
 
-					subnets := []model.Subnet{
+					subnets := model.Subnets{
 						private1,
 						private2,
 						public1,
 						public2,
 					}
-					publicSubnets := []model.Subnet{
+					publicSubnets := model.Subnets{
 						public1,
 						public2,
 					}
-					privateSubnets := []model.Subnet{
+					privateSubnets := model.Subnets{
 						private1,
 						private2,
 					}
@@ -2473,7 +2417,7 @@ worker:
 		},
 		{
 			context: "WithNetworkTopologyAllExistingPrivateSubnets",
-			configYaml: mainClusterYaml + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + fmt.Sprintf(`
 vpc:
   id: vpc-1a2b3c4d
 subnets:
@@ -2486,8 +2430,9 @@ subnets:
   idFromStackOutput: mycluster-private-subnet-1
   private: true
 controller:
-  loadBalancer:
-    private: true
+  subnets:
+  - name: private1
+  - name: private2
 etcd:
   subnets:
   - name: private1
@@ -2498,7 +2443,14 @@ worker:
     subnets:
     - name: private1
     - name: private2
-`,
+apiEndpoints:
+- name: public
+  dnsName: "%s"
+  loadBalancer:
+    hostedZone:
+      id: hostedzone-xxxx
+    private: true
+`, kubeAwsSettings.externalDNSName),
 			assertConfig: []ConfigTester{
 				hasDefaultExperimentalFeatures,
 				hasNoNGWsOrEIPsOrRoutes,
@@ -2516,9 +2468,6 @@ subnets:
 - name: public2
   availabilityZone: us-west-1b
   idFromStackOutput: mycluster-public-subnet-1
-controller:
-  loadBalancer:
-    private: false
 etcd:
   subnets:
   - name: public1
@@ -2588,21 +2537,21 @@ worker:
 					public2 := model.NewPublicSubnet("us-west-1b", "10.0.4.0/24")
 					public2.Name = "public2"
 
-					subnets := []model.Subnet{
+					subnets := model.Subnets{
 						private1,
 						private2,
 						public1,
 						public2,
 					}
-					publicSubnets := []model.Subnet{
+					publicSubnets := model.Subnets{
 						public1,
 						public2,
 					}
-					privateSubnets := []model.Subnet{
+					privateSubnets := model.Subnets{
 						private1,
 						private2,
 					}
-					importedPublicSubnets := []model.Subnet{
+					importedPublicSubnets := model.Subnets{
 						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
 						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
 					}
@@ -2690,21 +2639,21 @@ worker:
 					public2 := model.NewPublicSubnet("us-west-1b", "10.0.4.0/24")
 					public2.Name = "public2"
 
-					subnets := []model.Subnet{
+					subnets := model.Subnets{
 						private1,
 						private2,
 						public1,
 						public2,
 					}
-					publicSubnets := []model.Subnet{
+					publicSubnets := model.Subnets{
 						public1,
 						public2,
 					}
-					privateSubnets := []model.Subnet{
+					privateSubnets := model.Subnets{
 						private1,
 						private2,
 					}
-					importedPublicSubnets := []model.Subnet{
+					importedPublicSubnets := model.Subnets{
 						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
 						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
 					}
@@ -2985,19 +2934,22 @@ internetGatewayId: igw-1a2b3c4d
 		},
 		{
 			context: "WithVpcIdAndRouteTableIdSpecified",
-			configYaml: minimalValidConfigYaml + `
+			configYaml: mainClusterYaml + `
 vpc:
   id: vpc-1a2b3c4d
-internetGateway:
-  id: igw-1a2b3c4d
-routeTableId: rtb-1a2b3c4d
+subnets:
+- name: Subnet0
+  availabilityZone: us-west-1c
+  instanceCIDR: "10.0.0.0/24"
+  routeTable:
+    id: rtb-1a2b3c4d
 `,
 			assertConfig: []ConfigTester{
 				hasDefaultExperimentalFeatures,
 				func(c *config.Config, t *testing.T) {
-					subnet1 := model.NewPublicSubnetWithPreconfiguredRouteTable("us-west-1c", "10.0.0.0/24", "rtb-1a2b3c4d")
+					subnet1 := model.NewPublicSubnetWithPreconfiguredRouteTable(firstAz, "10.0.0.0/24", "rtb-1a2b3c4d")
 					subnet1.Name = "Subnet0"
-					subnets := []model.Subnet{
+					subnets := model.Subnets{
 						subnet1,
 					}
 					expected := controlplane_config.EtcdSettings{
@@ -3486,6 +3438,19 @@ worker:
 		expectedErrorMessage string
 	}{
 		{
+			context: "WithAPIEndpointLBAPIAccessAllowedSourceCIDRsEmptied",
+			configYaml: configYamlWithoutExernalDNSName + `
+apiEndpoints:
+- name: default
+  dnsName: k8s.example.com
+  loadBalancer:
+    apiAccessAllowedSourceCIDRs:
+    hostedZone:
+      id: a1b2c4
+`,
+			expectedErrorMessage: `invalid cluster: invalid apiEndpoint "default" at index 0: invalid loadBalancer: either apiAccessAllowedSourceCIDRs or securityGroupIds must be present. Try not to explicitly empty apiAccessAllowedSourceCIDRs or set one or more securityGroupIDs`,
+		},
+		{
 			context: "WithAutoscalingEnabledButClusterAutoscalerIsDefault",
 			configYaml: minimalValidConfigYaml + `
 worker:
@@ -3688,7 +3653,7 @@ experimental:
 		},
 		{
 			context: "WithMultiAPIEndpointsInvalidLB",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 vpc:
   id: vpc-1a2b3c4d
 internetGateway:
@@ -3713,11 +3678,11 @@ apiEndpoints:
     hostedZone:
       id: hostedzone-public
 `,
-			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: invalid loadBalancer: createRecordSet, private, subnets, hostedZone must be omitted when id is specified to reuse an existing ELB",
+			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: invalid loadBalancer: type, private, subnets, hostedZone must be omitted when id is specified to reuse an existing ELB",
 		},
 		{
 			context: "WithMultiAPIEndpointsInvalidWorkerAPIEndpointName",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 vpc:
   id: vpc-1a2b3c4d
 internetGateway:
@@ -3754,7 +3719,7 @@ apiEndpoints:
 		},
 		{
 			context: "WithMultiAPIEndpointsInvalidWorkerNodePoolAPIEndpointName",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 vpc:
   id: vpc-1a2b3c4d
 internetGateway:
@@ -3795,7 +3760,7 @@ apiEndpoints:
 		},
 		{
 			context: "WithMultiAPIEndpointsMissingDNSName",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 vpc:
   id: vpc-1a2b3c4d
 internetGateway:
@@ -3809,12 +3774,15 @@ subnets:
 apiEndpoints:
 - name: unversionedPublic
   dnsName:
+  loadBalancer:
+    hostedZone:
+      id: hostedzone-public
 `,
 			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: dnsName must be set",
 		},
 		{
 			context: "WithMultiAPIEndpointsMissingGlobalAPIEndpointName",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 vpc:
   id: vpc-1a2b3c4d
 internetGateway:
@@ -3855,7 +3823,7 @@ apiEndpoints:
 		},
 		{
 			context: "WithMultiAPIEndpointsRecordSetImpliedBySubnetsMissingHostedZoneID",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 vpc:
   id: vpc-1a2b3c4d
 internetGateway:
@@ -3879,11 +3847,11 @@ apiEndpoints:
     - name: publicSubnet1
     # missing hosted zone id here!
 `,
-			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: invalid loadBalancer: missing hostedZoneId",
+			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: invalid loadBalancer: missing hostedZone.id",
 		},
 		{
 			context: "WithMultiAPIEndpointsRecordSetImpliedByExplicitPublicMissingHostedZoneID",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 vpc:
   id: vpc-1a2b3c4d
 internetGateway:
@@ -3906,11 +3874,11 @@ apiEndpoints:
     private: false
     # missing hosted zone id here!
 `,
-			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: invalid loadBalancer: missing hostedZoneId",
+			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: invalid loadBalancer: missing hostedZone.id",
 		},
 		{
 			context: "WithMultiAPIEndpointsRecordSetImpliedByExplicitPrivateMissingHostedZoneID",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
+			configYaml: kubeAwsSettings.mainClusterYamlWithoutAPIEndpoint() + `
 vpc:
   id: vpc-1a2b3c4d
 internetGateway:
@@ -3936,34 +3904,7 @@ apiEndpoints:
     private: true
     # missing hosted zone id here!
 `,
-			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: invalid loadBalancer: missing hostedZoneId",
-		},
-		{
-			context: "WithMultiAPIEndpointsExplicitRecordSetMissingHostedZoneID",
-			configYaml: kubeAwsSettings.mainClusterYamlWithoutExternalDNS() + `
-vpc:
-  id: vpc-1a2b3c4d
-internetGateway:
-  id: igw-1a2b3c4d
-
-subnets:
-- name: publicSubnet1
-  availabilityZone: us-west-1a
-  instanceCIDR: "10.0.1.0/24"
-
-worker:
-  apiEndpointName: unversionedPublic
-
-apiEndpoints:
-- name: unversionedPublic
-  dnsName: api.example.com
-  loadBalancer:
-    # lb is going to be created with a corresponding record set
-    # however no hosted zone for the record set is provided!
-    createRecordSet: true
-    # missing hosted zone id here!
-`,
-			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: invalid loadBalancer: missing hostedZoneId",
+			expectedErrorMessage: "invalid apiEndpoint \"unversionedPublic\" at index 0: invalid loadBalancer: missing hostedZone.id",
 		},
 		{
 			context: "WithNetworkTopologyAllExistingPrivateSubnetsRejectingExistingIGW",
@@ -4070,11 +4011,59 @@ worker:
 			expectedErrorMessage: `internet gateway id can't be omitted when there're one or more managed public subnets in an existing VPC`,
 		},
 		{
-			context: "WithNonZeroWorkerCount",
-			configYaml: minimalValidConfigYaml + `
-workerCount: 1
+			context: "WithNetworkTopologyAllPreconfiguredPrivateDeprecatedAndThenRemoved",
+			configYaml: mainClusterYaml + `
+vpc:
+  id: vpc-1a2b3c4d
+# This, in combination with mapPublicIPs=false, had been implying that the route table contains a route to a preconfigured NAT gateway
+# See https://github.com/kubernetes-incubator/kube-aws/pull/284#issuecomment-276008202
+routeTableId: rtb-1a2b3c4d
+# This had been implied that all the subnets created by kube-aws should be private
+mapPublicIPs: false
+subnets:
+- availabilityZone: us-west-1a
+  instanceCIDR: "10.0.1.0/24"
+  # implies
+  # private: true
+  # routeTable
+  #   id: rtb-1a2b3c4d
+- availabilityZone: us-west-1b
+  instanceCIDR: "10.0.2.0/24"
+  # implies
+  # private: true
+  # routeTable
+  #   id: rtb-1a2b3c4d
 `,
-			expectedErrorMessage: "`workerCount` is removed. Set worker.nodePools[].count per node pool instead",
+			expectedErrorMessage: "internet gateway id can't be omitted when there're one or more managed public subnets in an existing VPC",
+		},
+		{
+			context: "WithNetworkTopologyAllPreconfiguredPublicDeprecatedAndThenRemoved",
+			configYaml: mainClusterYaml + `
+vpc:
+  id: vpc-1a2b3c4d
+# This, in combination with mapPublicIPs=true, had been implying that the route table contains a route to a preconfigured internet gateway
+# See https://github.com/kubernetes-incubator/kube-aws/pull/284#issuecomment-276008202
+routeTableId: rtb-1a2b3c4d
+# This had been implied that all the subnets created by kube-aws should be public
+mapPublicIPs: true
+# internetGateway.id should be omitted as we assume that the route table specified by routeTableId already contain a route to one
+#internetGateway:
+#  id:
+subnets:
+- availabilityZone: us-west-1a
+  instanceCIDR: "10.0.1.0/24"
+  # #implies
+  # private: false
+  # routeTable
+  #   id: rtb-1a2b3c4d
+- availabilityZone: us-west-1b
+  instanceCIDR: "10.0.2.0/24"
+  # #implies
+  # private: false
+  # routeTable
+  #   id: rtb-1a2b3c4d
+`,
+			expectedErrorMessage: "internet gateway id can't be omitted when there're one or more managed public subnets in an existing VPC",
 		},
 		{
 			context: "WithVpcIdAndVPCCIDRSpecified",
@@ -4146,22 +4135,11 @@ worker:
 			expectedErrorMessage: "number of user provided security groups must be less than or equal to 4 but was 5",
 		},
 		{
-			context: "WithUnknownKeyInControlPlane",
+			context: "WithUnknownKeyInRoot",
 			configYaml: minimalValidConfigYaml + `
-# Must be "nodePools"
-nodePool:
-- name: pool1
+foo: bar
 `,
-			expectedErrorMessage: "unknown keys found: nodePool",
-		},
-		{
-			context: "WithUnknownKeyInControlPlaneExperimentals",
-			configYaml: minimalValidConfigYaml + `
-# Settings for an experimental feature must be under the "experimental" field. Ignored.
-nodeDrainer:
-  enabled: true
-`,
-			expectedErrorMessage: "unknown keys found: nodeDrainer",
+			expectedErrorMessage: "unknown keys found: foo",
 		},
 		{
 			context: "WithUnknownKeyInController",
@@ -4187,6 +4165,17 @@ etcd:
   foo: 1
 `,
 			expectedErrorMessage: "unknown keys found in etcd: foo",
+		},
+		{
+			context: "WithUnknownKeyInWorkerNodePool",
+			configYaml: minimalValidConfigYaml + `
+worker:
+  nodePools:
+  - name: pool1
+    clusterAutoscaler:
+      enabled: true
+`,
+			expectedErrorMessage: "unknown keys found in worker.nodePools[0]: clusterAutoscaler",
 		},
 		{
 			context: "WithUnknownKeyInWorkerNodePoolASG",
@@ -4342,7 +4331,7 @@ worker:
         enabled: true
         version: ""
 `,
-			expectedErrorMessage: `instance type t2.medium doesn't support GPU. You can enable Nvidia driver intallation support only when use [p2 g2] instance family.`,
+			expectedErrorMessage: `instance type t2.medium doesn't support GPU. You can enable Nvidia driver intallation support only when use [p2 p3 g2 g3] instance family.`,
 		},
 	}
 

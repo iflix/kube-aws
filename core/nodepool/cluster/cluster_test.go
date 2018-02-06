@@ -13,9 +13,10 @@ import (
 
 	"errors"
 	"fmt"
-	"github.com/kubernetes-incubator/kube-aws/plugin/pluginmodel"
 	"strings"
 	"testing"
+
+	"github.com/kubernetes-incubator/kube-aws/plugin/pluginmodel"
 )
 
 type dummyEC2CreateVolumeService struct {
@@ -88,7 +89,12 @@ func (svc dummyEC2DescribeKeyPairsService) DescribeKeyPairs(input *ec2.DescribeK
 
 func TestValidateKeyPair(t *testing.T) {
 	main, err := controlplane.ConfigFromBytes([]byte(`clusterName: test-cluster
-externalDNSName: test-cluster.example.com
+apiEndpoints:
+- name: public
+  dnsName: test-cluster.example.com
+  loadBalancer:
+    hostedZone:
+      id: hostedzone-xxxx
 keyName: mykey
 kmsKeyArn: mykeyarn
 region: us-west-1
@@ -123,7 +129,11 @@ const minimalYaml = `name: pool1
 
 func TestValidateWorkerRootVolume(t *testing.T) {
 	main, err := controlplane.ConfigFromBytes([]byte(`clusterName: test-cluster
-externalDNSName: test-cluster.example.com
+apiEndpoints:
+- name: public
+  dnsName: test-cluster.example.com
+  loadBalancer:
+    recordSetManaged: false
 keyName: mykey
 kmsKeyArn: mykeyarn
 region: us-west-1
@@ -172,7 +182,7 @@ rootVolume:
 		},
 		{
 			expectedRootVolume: &ec2.CreateVolumeInput{
-				Iops:       aws.Int64(2000),
+				Iops:       aws.Int64(20000),
 				Size:       aws.Int64(100),
 				VolumeType: aws.String("io1"),
 			},
@@ -180,7 +190,7 @@ rootVolume:
 rootVolume:
   type: io1
   size: 100
-  iops: 2000
+  iops: 20000
 `,
 		},
 	}
@@ -204,7 +214,11 @@ rootVolume:
 
 func TestStackUploadsAndCreation(t *testing.T) {
 	mainConfigBody := `
-externalDNSName: test.staging.core-os.net
+apiEndpoints:
+- name: public
+  dnsName: test.staging.core-os.net
+  loadBalancer:
+    recordSetManaged: false
 keyName: test-key-name
 region: us-west-1
 clusterName: test-cluster-name
