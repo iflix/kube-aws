@@ -549,9 +549,9 @@ type Experimental struct {
 	Oidc                                  model.Oidc                     `yaml:"oidc"`
 	DisableSecurityGroupIngress           bool                           `yaml:"disableSecurityGroupIngress"`
 	NodeMonitorGracePeriod                string                         `yaml:"nodeMonitorGracePeriod"`
+	HorizontalPodAutoscalerDownscaleDelay string                         `yaml:"horizontalPodAutoscalerDownscaleDelay"`
+	HorizontalPodAutoscalerUpscaleDelay   string                         `yaml:"horizontalPodAutoscalerUpscaleDelay"`
 	model.UnknownKeys                     `yaml:",inline"`
-	HorizontalPodAutoscalerDownscaleDelay string `yaml:"horizontalPodAutoscalerDownscaleDelay"`
-	HorizontalPodAutoscalerUpscaleDelay   string `yaml:"horizontalPodAutoscalerUpscaleDelay"`
 }
 
 type Admission struct {
