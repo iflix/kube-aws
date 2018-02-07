@@ -1893,6 +1893,12 @@ write_files:
           {{if .Experimental.DisableSecurityGroupIngress}}
           - --cloud-config=/etc/kubernetes/additional-configs/cloud.config
           {{end}}
+          {{if .Experimental.HorizontalPodAutoscalerDownscaleDelay}}
+          - --horizontal-pod-autoscaler-downscale-delay={{ .Experimental.HorizontalPodAutoscalerDownscaleDelay }}
+          {{end}}
+          {{if .Experimental.HorizontalPodAutoscalerUpscaleDelay}}
+          - --horizontal-pod-autoscaler-upscale-delay={{ .Experimental.HorizontalPodAutoscalerUpscaleDelay }}
+          {{end}}
           resources:
             requests:
               cpu: 200m

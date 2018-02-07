@@ -531,20 +531,22 @@ type Experimental struct {
 	AwsNodeLabels  AwsNodeLabels  `yaml:"awsNodeLabels"`
 	// When cluster-autoscaler support is enabled, not only controller nodes but this node pool is also given
 	// a node label and IAM permissions to run cluster-autoscaler
-	ClusterAutoscalerSupport    model.ClusterAutoscalerSupport `yaml:"clusterAutoscalerSupport"`
-	TLSBootstrap                TLSBootstrap                   `yaml:"tlsBootstrap"`
-	NodeAuthorizer              NodeAuthorizer                 `yaml:"nodeAuthorizer"`
-	EphemeralImageStorage       EphemeralImageStorage          `yaml:"ephemeralImageStorage"`
-	Kube2IamSupport             Kube2IamSupport                `yaml:"kube2IamSupport,omitempty"`
-	KubeletOpts                 string                         `yaml:"kubeletOpts,omitempty"`
-	LoadBalancer                LoadBalancer                   `yaml:"loadBalancer"`
-	TargetGroup                 TargetGroup                    `yaml:"targetGroup"`
-	NodeDrainer                 model.NodeDrainer              `yaml:"nodeDrainer"`
-	Plugins                     Plugins                        `yaml:"plugins"`
-	Oidc                        model.Oidc                     `yaml:"oidc"`
-	DisableSecurityGroupIngress bool                           `yaml:"disableSecurityGroupIngress"`
-	NodeMonitorGracePeriod      string                         `yaml:"nodeMonitorGracePeriod"`
-	model.UnknownKeys           `yaml:",inline"`
+	ClusterAutoscalerSupport              model.ClusterAutoscalerSupport `yaml:"clusterAutoscalerSupport"`
+	TLSBootstrap                          TLSBootstrap                   `yaml:"tlsBootstrap"`
+	NodeAuthorizer                        NodeAuthorizer                 `yaml:"nodeAuthorizer"`
+	EphemeralImageStorage                 EphemeralImageStorage          `yaml:"ephemeralImageStorage"`
+	Kube2IamSupport                       Kube2IamSupport                `yaml:"kube2IamSupport,omitempty"`
+	KubeletOpts                           string                         `yaml:"kubeletOpts,omitempty"`
+	LoadBalancer                          LoadBalancer                   `yaml:"loadBalancer"`
+	TargetGroup                           TargetGroup                    `yaml:"targetGroup"`
+	NodeDrainer                           model.NodeDrainer              `yaml:"nodeDrainer"`
+	Plugins                               Plugins                        `yaml:"plugins"`
+	Oidc                                  model.Oidc                     `yaml:"oidc"`
+	DisableSecurityGroupIngress           bool                           `yaml:"disableSecurityGroupIngress"`
+	NodeMonitorGracePeriod                string                         `yaml:"nodeMonitorGracePeriod"`
+	HorizontalPodAutoscalerUpscaleDelay   string                         `yaml:"horizontalPodAutoscalerUpscaleDelay"`
+	HorizontalPodAutoscalerDownscaleDelay string                         `yaml:"horizontalPodAutoscalerDownscaleDelay"`
+	model.UnknownKeys                     `yaml:",inline"`
 }
 
 type Admission struct {
