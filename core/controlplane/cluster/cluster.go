@@ -244,7 +244,9 @@ func (c *Cluster) stackProvisioner() *cfnstack.Provisioner {
 		c.ClusterExportedStacksS3URI(),
 		c.Region,
 		stackPolicyBody,
-		c.session)
+		c.session,
+		c.CloudFormation.RoleARN,
+	)
 }
 
 func (c *Cluster) Validate() error {
@@ -275,7 +277,7 @@ func (c *Cluster) String() string {
 }
 
 func (c *ClusterRef) Destroy() error {
-	return cfnstack.NewDestroyer(c.StackName(), c.session).Destroy()
+	return cfnstack.NewDestroyer(c.StackName(), c.session, c.CloudFormation.RoleARN).Destroy()
 }
 
 func (c *ClusterRef) validateKeyPair(ec2Svc ec2Service) error {
@@ -300,10 +302,11 @@ type r53Service interface {
 	GetHostedZone(*route53.GetHostedZoneInput) (*route53.GetHostedZoneOutput, error)
 }
 
+// TODO validateDNSConfig seems to be called from nowhere but should be called while validating `apiEndpoints` config
 func (c *ClusterRef) validateDNSConfig(r53 r53Service) error {
-	if !c.CreateRecordSet {
-		return nil
-	}
+	//if !c.CreateRecordSet {
+	//	return nil
+	//}
 
 	hzOut, err := r53.GetHostedZone(&route53.GetHostedZoneInput{Id: aws.String(c.HostedZoneID)})
 	if err != nil {

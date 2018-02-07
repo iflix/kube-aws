@@ -176,8 +176,11 @@ func TestExistingVPCValidation(t *testing.T) {
 		`
 vpcCIDR: 10.5.0.0/16
 vpcId: vpc-xxx1
-routeTableId: rtb-xxxxxx
-instanceCIDR: 10.5.11.0/24
+subnets:
+- name: Subnet0
+  routeTable:
+    id: rtb-xxxxxx
+  instanceCIDR: 10.5.11.0/24
 `, `
 vpcCIDR: 192.168.1.0/24
 vpcId: vpc-xxx2
@@ -198,30 +201,37 @@ subnets:
 		`
 vpcCIDR: 10.0.0.0/16
 vpcId: vpc-xxx3 #vpc does not exist
-instanceCIDR: 10.0.0.0/24
-routeTableId: rtb-xxxxxx
+subnets:
+- name: Subnet0
+  routeTable:
+    id: rtb-xxxxxx
+  instanceCIDR: 10.0.0.0/24
 `, `
 vpcCIDR: 10.10.0.0/16 #vpc cidr does match existing vpc-xxx1
 vpcId: vpc-xxx1
-instanceCIDR: 10.10.0.0/24
-routeTableId: rtb-xxxxxx
+subnets:
+- name: Subnet0
+  routeTable:
+    id: rtb-xxxxxx
+  instanceCIDR: 10.10.0.0/24
 `, `
 vpcCIDR: 10.5.0.0/16
 instanceCIDR: 10.5.2.0/28 #instance cidr conflicts with existing subnet
 vpcId: vpc-xxx1
-routeTableId: rtb-xxxxxx
 `, `
 vpcCIDR: 192.168.1.0/24
 instanceCIDR: 192.168.1.100/26 #instance cidr conflicts with existing subnet
 vpcId: vpc-xxx2
-routeTableId: rtb-xxxxxx
 `, `
 vpcCIDR: 192.168.1.0/24
 vpcId: vpc-xxx2
-routeTableId: rtb-xxxxxx
 subnets:
   - instanceCIDR: 192.168.1.100/26  #instance cidr conflicts with existing subnet
+    routeTable:
+      id: rtb-xxxxxx
   - instanceCIDR: 192.168.1.0/26
+    routeTable:
+      id: rtb-xxxxxx
 `,
 	}
 
@@ -656,7 +666,7 @@ controller:
 		},
 		{
 			expectedRootVolume: &ec2.CreateVolumeInput{
-				Iops:       aws.Int64(2000),
+				Iops:       aws.Int64(20000),
 				Size:       aws.Int64(100),
 				VolumeType: aws.String("io1"),
 			},
@@ -665,7 +675,7 @@ controller:
   rootVolume:
     type: io1
     size: 100
-    iops: 2000
+    iops: 20000
 `,
 		},
 		// TODO Remove test cases for deprecated keys in v0.9.7
@@ -692,14 +702,14 @@ controllerRootVolumeSize: 50
 		},
 		{
 			expectedRootVolume: &ec2.CreateVolumeInput{
-				Iops:       aws.Int64(2000),
+				Iops:       aws.Int64(20000),
 				Size:       aws.Int64(100),
 				VolumeType: aws.String("io1"),
 			},
 			clusterYaml: `
 controllerRootVolumeType: io1
 controllerRootVolumeSize: 100
-controllerRootVolumeIOPS: 2000
+controllerRootVolumeIOPS: 20000
 `,
 		},
 	}
