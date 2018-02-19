@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/kubernetes-incubator/kube-aws/core/controlplane/config"
 	"github.com/kubernetes-incubator/kube-aws/core/root"
@@ -48,23 +47,8 @@ func init() {
 	cmdRenderCredentials.Flags().StringVar(&renderCredentialsOpts.CaCertPath, "ca-cert-path", "./credentials/ca.pem", "path to pem-encoded CA x509 certificate")
 }
 func runCmdRender(cmd *cobra.Command, args []string) error {
-	fmt.Println("WARNING: 'kube-aws render' is deprecated. See 'kube-aws render --help' for usage")
-	if len(args) != 0 {
-		return fmt.Errorf("render takes no arguments\n")
-	}
-
-	if _, err := os.Stat(renderCredentialsOpts.CaKeyPath); os.IsNotExist(err) {
-		renderCredentialsOpts.GenerateCA = true
-	}
-	if err := runCmdRenderCredentials(cmdRenderCredentials, args); err != nil {
-		return err
-	}
-
-	if err := runCmdRenderStack(cmdRenderCredentials, args); err != nil {
-		return err
-	}
-
-	return nil
+  fmt.Println("'kube-aws render' has been removed, please use 'kube-aws render credentials' or 'kube-aws render stack' explicitly.")
+  return nil
 }
 func runCmdRenderStack(cmd *cobra.Command, args []string) error {
 	// Read the config from file.
