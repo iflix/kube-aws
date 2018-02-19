@@ -744,6 +744,75 @@ experimental:
 
 }
 
+func TestKubeDns(t *testing.T) {
+
+	validConfigs := []struct {
+		conf    string
+		kubeDns KubeDns
+	}{
+		{
+			conf: `
+`,
+			kubeDns: KubeDns{
+				NodeLocalResolver: false,
+				Autoscaler: KubeDnsAutoscaler{
+					CoresPerReplica: 256,
+					NodesPerReplica: 16,
+					Min:             2,
+				},
+			},
+		},
+		{
+			conf: `
+kubeDns:
+  nodeLocalResolver: false
+`,
+			kubeDns: KubeDns{
+				NodeLocalResolver: false,
+				Autoscaler: KubeDnsAutoscaler{
+					CoresPerReplica: 256,
+					NodesPerReplica: 16,
+					Min:             2,
+				},
+			},
+		},
+		{
+			conf: `
+kubeDns:
+  nodeLocalResolver: true
+  autoscaler:
+    coresPerReplica: 5
+    nodesPerReplica: 10
+    min: 15
+`,
+			kubeDns: KubeDns{
+				NodeLocalResolver: true,
+				Autoscaler: KubeDnsAutoscaler{
+					CoresPerReplica: 5,
+					NodesPerReplica: 10,
+					Min:             15,
+				},
+			},
+		},
+	}
+
+	for _, conf := range validConfigs {
+		confBody := singleAzConfigYaml + conf.conf
+		c, err := ClusterFromBytes([]byte(confBody))
+		if err != nil {
+			t.Errorf("failed to parse config %s: %v", confBody, err)
+			continue
+		}
+		if !reflect.DeepEqual(c.KubeDns, conf.kubeDns) {
+			t.Errorf(
+				"parsed kubeDns settings %+v does not match config: %s",
+				c.KubeDns,
+				confBody,
+			)
+		}
+	}
+}
+
 func TestTLSBootstrapConfig(t *testing.T) {
 
 	validConfigs := []struct {
