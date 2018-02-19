@@ -133,6 +133,11 @@ func NewDefaultCluster() *Cluster {
 			},
 			KubeDns: KubeDns{
 				NodeLocalResolver: false,
+				Autoscaler: KubeDnsAutoscaler{
+					CoresPerReplica: 256,
+					NodesPerReplica: 16,
+					Min:             2,
+				},
 			},
 			CloudFormationStreaming:            true,
 			HyperkubeImage:                     model.Image{Repo: "quay.io/coreos/hyperkube", Tag: k8sVer, RktPullDocker: false},
@@ -660,8 +665,15 @@ type Rbac struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+type KubeDnsAutoscaler struct {
+	CoresPerReplica int `yaml:"coresPerReplica"`
+	NodesPerReplica int `yaml:"nodesPerReplica"`
+	Min             int `yaml:"min"`
+}
+
 type KubeDns struct {
-	NodeLocalResolver bool `yaml:"nodeLocalResolver"`
+	NodeLocalResolver bool              `yaml:"nodeLocalResolver"`
+	Autoscaler        KubeDnsAutoscaler `yaml:"autoscaler"`
 }
 
 func (c *KubeDns) MergeIfEmpty(other KubeDns) {
