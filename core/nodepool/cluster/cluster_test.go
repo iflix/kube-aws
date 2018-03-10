@@ -39,9 +39,14 @@ func (svc dummyEC2CreateVolumeService) CreateVolume(input *ec2.CreateVolumeInput
 		)
 	}
 
-	if aws.Int64Value(input.Iops) != aws.Int64Value(expected.Iops) {
+	if (input.Iops == nil && expected.Iops != nil) ||
+		(input.Iops != nil && expected.Iops == nil) ||
+		aws.Int64Value(input.Iops) != aws.Int64Value(expected.Iops) {
 		return nil, fmt.Errorf(
-			"unexpected root volume iops\nexpected=%v, observed=%v",
+			"unexpected root volume iops\n raw values expected=%v, observed=%v \n "+
+				"dereferenced values: expected=%v, observed=%v",
+			expected.Iops,
+			input.Iops,
 			aws.Int64Value(expected.Iops),
 			aws.Int64Value(input.Iops),
 		)
@@ -139,7 +144,6 @@ availabilityZone: dummy-az-0
 	}{
 		{
 			expectedRootVolume: &ec2.CreateVolumeInput{
-				Iops:       aws.Int64(0),
 				Size:       aws.Int64(30),
 				VolumeType: aws.String("gp2"),
 			},
@@ -149,7 +153,6 @@ availabilityZone: dummy-az-0
 		},
 		{
 			expectedRootVolume: &ec2.CreateVolumeInput{
-				Iops:       aws.Int64(0),
 				Size:       aws.Int64(30),
 				VolumeType: aws.String("standard"),
 			},
@@ -160,7 +163,6 @@ rootVolume:
 		},
 		{
 			expectedRootVolume: &ec2.CreateVolumeInput{
-				Iops:       aws.Int64(0),
 				Size:       aws.Int64(50),
 				VolumeType: aws.String("gp2"),
 			},
