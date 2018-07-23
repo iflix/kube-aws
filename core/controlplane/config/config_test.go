@@ -1334,3 +1334,25 @@ func TestWithTrailingDot(t *testing.T) {
 		}
 	}
 }
+
+func TestHPAConfig(t *testing.T) {
+	conf := `
+experimental:
+  horizontalPodAutoscalerDownscaleDelay: "3m0s"
+  horizontalPodAutoscalerUpscaleDelay: "30s"
+
+`
+	confBody := singleAzConfigYaml + conf
+	c, err := ClusterFromBytes([]byte(confBody))
+	if err != nil {
+		t.Errorf("failed to parse config %s: %v", confBody, err)
+	}
+
+	if c.Experimental.HorizontalPodAutoscalerDownscaleDelay != "3m0s" {
+		t.Errorf("failed to parse config (HorizontalPodAutoscalerDownscaleDelay) %s: %v", confBody, err)
+	}
+
+	if c.Experimental.HorizontalPodAutoscalerUpscaleDelay != "30s" {
+		t.Errorf("failed to parse config (HorizontalPodAutoscalerUpscaleDelay) %s: %v", confBody, err)
+	}
+}
