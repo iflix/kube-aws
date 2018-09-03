@@ -84,7 +84,8 @@ $ kube-aws init \
 --region=us-west-1 \
 --availability-zone=us-west-1c \
 --key-name=key-pair-name \
---kms-key-arn="arn:aws:kms:us-west-1:xxxxxxxxxx:key/xxxxxxxxxxxxxxxxxxx"
+--kms-key-arn="arn:aws:kms:us-west-1:xxxxxxxxxx:key/xxxxxxxxxxxxxxxxxxx" \
+--s3-uri=s3://my-kube-aws-assets-bucket
 ```
 
 Here `us-west-1c` is used for parameter `--availability-zone`, but supported availability zone varies among AWS accounts.
@@ -109,6 +110,8 @@ There will now be a `cluster.yaml` file in the asset directory. This is the main
   ```sh
   $ kube-aws render credentials --ca-cert-path=/path/to/ca-cert.pem --ca-key-path=/path/to/ca-key.pem
   ```
+
+  If the CA key is encrypted (which it should), you will be prompted for the key passphrase. Although not recommended, `KUBE_AWS_CA_KEY_PASSPHRASE` environment variable can be set to automate this process.
 
   For more information on operating your own CA, check out this [awesome guide](https://jamielinux.com/docs/openssl-certificate-authority/).
 
@@ -382,7 +385,7 @@ The `validate` command check the validity of your changes to the cloud-config us
 This is an important step to make sure your stack will launch successfully:
 
 ```sh
-$ kube-aws validate --s3-uri s3://<your-bucket-name>/<prefix>
+$ kube-aws validate
 ```
 
 If your files are valid, you are ready to [launch your cluster][getting-started-step-3].
