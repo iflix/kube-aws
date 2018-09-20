@@ -1,8 +1,5 @@
 package config
 
-//go:generate go run ../../../codegen/templates_gen.go StackTemplateTemplate=stack-template.json
-//go:generate gofmt -w templates.go
-
 import (
 	"fmt"
 	"strings"
@@ -84,7 +81,7 @@ func (c ProvidedConfig) StackConfig(opts StackTemplateOptions) (*StackConfig, er
 
 	tlsBootstrappingEnabled := c.Experimental.TLSBootstrap.Enabled
 	if stackConfig.ComputedConfig.AssetsEncryptionEnabled() {
-		compactAssets, err := cfg.ReadOrCreateCompactAssets(opts.AssetsDir, c.ManageCertificates, tlsBootstrappingEnabled, cfg.KMSConfig{
+		compactAssets, err := cfg.ReadOrCreateCompactAssets(opts.AssetsDir, c.ManageCertificates, tlsBootstrappingEnabled, false, cfg.KMSConfig{
 			Region:         stackConfig.ComputedConfig.Region,
 			KMSKeyARN:      c.KMSKeyARN,
 			EncryptService: c.ProvidedEncryptService,
@@ -94,7 +91,7 @@ func (c ProvidedConfig) StackConfig(opts StackTemplateOptions) (*StackConfig, er
 		}
 		stackConfig.ComputedConfig.AssetsConfig = compactAssets
 	} else {
-		rawAssets, _ := cfg.ReadOrCreateUnencryptedCompactAssets(opts.AssetsDir, c.ManageCertificates, tlsBootstrappingEnabled)
+		rawAssets, _ := cfg.ReadOrCreateUnencryptedCompactAssets(opts.AssetsDir, c.ManageCertificates, tlsBootstrappingEnabled, false)
 		stackConfig.ComputedConfig.AssetsConfig = rawAssets
 	}
 
@@ -165,6 +162,7 @@ func (c *ProvidedConfig) Load(main *cfg.Config) error {
 	c.KubeClusterSettings = main.KubeClusterSettings
 	c.Experimental.TLSBootstrap = main.DeploymentSettings.Experimental.TLSBootstrap
 	c.Experimental.NodeDrainer = main.DeploymentSettings.Experimental.NodeDrainer
+	c.Experimental.GpuSupport = main.DeploymentSettings.Experimental.GpuSupport
 	c.Kubelet.RotateCerts = main.DeploymentSettings.Kubelet.RotateCerts
 
 	if c.Experimental.ClusterAutoscalerSupport.Enabled {
@@ -293,6 +291,9 @@ func (c ProvidedConfig) FeatureGates() model.FeatureGates {
 	if c.Gpu.Nvidia.IsEnabledOn(c.InstanceType) {
 		gates["Accelerators"] = "true"
 	}
+	if c.Experimental.GpuSupport.Enabled {
+		gates["DevicePlugins"] = "true"
+	}
 	if c.Kubelet.RotateCerts.Enabled {
 		gates["RotateKubeletClientCertificate"] = "true"
 	}
@@ -329,7 +330,7 @@ func (c ProvidedConfig) validate() error {
 		return err
 	}
 
-	if err := c.WorkerNodePoolConfig.Validate(); err != nil {
+	if err := c.WorkerNodePoolConfig.Validate(c.Experimental); err != nil {
 		return err
 	}
 

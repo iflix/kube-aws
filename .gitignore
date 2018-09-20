@@ -1,3 +1,4 @@
+kube-aws
 /artifacts/template.json
 /bin
 /e2e/assets
@@ -16,3 +17,4 @@ _book
 *.mobi
 *.pdf
 node_modules
+kube-aws

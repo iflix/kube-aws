@@ -18,12 +18,14 @@ const availabilityZoneConfig = `availabilityZone: us-west-1c
 
 const apiEndpointMinimalConfigYaml = `keyName: test-key-name
 region: us-west-1
+s3URI: s3://mybucket/mydir
 clusterName: test-cluster-name
 kmsKeyArn: "arn:aws:kms:us-west-1:xxxxxxxxx:key/xxxxxxxxxxxxxxxxxxx"
 `
 
 const chinaAPIEndpointMinimalConfigYaml = `keyName: test-key-name
 region: cn-north-1
+s3URI: s3://mybucket/mydir
 availabilityZone: cn-north-1a
 clusterName: test-cluster-name
 `
@@ -930,6 +932,7 @@ func TestNodeDrainerConfig(t *testing.T) {
 			nodeDrainer: model.NodeDrainer{
 				Enabled:      false,
 				DrainTimeout: 5,
+				IAMRole:      model.IAMRole{},
 			},
 		},
 		{
@@ -937,10 +940,13 @@ func TestNodeDrainerConfig(t *testing.T) {
 experimental:
   nodeDrainer:
     enabled: true
+    iamRole:
+      arn: arn:aws:iam::0123456789012:role/asg-list-role
 `,
 			nodeDrainer: model.NodeDrainer{
 				Enabled:      true,
 				DrainTimeout: 5,
+				IAMRole:      model.IAMRole{ARN: model.ARN{Arn: "arn:aws:iam::0123456789012:role/asg-list-role"}},
 			},
 		},
 		{
@@ -1046,25 +1052,49 @@ func TestKubeDns(t *testing.T) {
 			conf: `
 `,
 			kubeDns: KubeDns{
+				NodeLocalResolver:   false,
 				DeployToControllers: false,
+				Autoscaler: KubeDnsAutoscaler{
+					CoresPerReplica: 256,
+					NodesPerReplica: 16,
+					Min:             2,
+				},
 			},
 		},
 		{
 			conf: `
 kubeDns:
+  nodeLocalResolver: false
   deployToControllers: false
 `,
 			kubeDns: KubeDns{
+				NodeLocalResolver:   false,
 				DeployToControllers: false,
+				Autoscaler: KubeDnsAutoscaler{
+					CoresPerReplica: 256,
+					NodesPerReplica: 16,
+					Min:             2,
+				},
 			},
 		},
 		{
 			conf: `
 kubeDns:
+  nodeLocalResolver: true
   deployToControllers: true
+  autoscaler:
+    coresPerReplica: 5
+    nodesPerReplica: 10
+    min: 15
 `,
 			kubeDns: KubeDns{
+				NodeLocalResolver:   true,
 				DeployToControllers: true,
+				Autoscaler: KubeDnsAutoscaler{
+					CoresPerReplica: 5,
+					NodesPerReplica: 10,
+					Min:             15,
+				},
 			},
 		},
 	}

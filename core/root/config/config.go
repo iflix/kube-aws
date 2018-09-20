@@ -1,13 +1,11 @@
 package config
 
-//go:generate go run ../../../codegen/templates_gen.go StackTemplateTemplate=stack-template.json
-//go:generate gofmt -w templates.go
-
 import (
 	"errors"
 	"fmt"
 	"io/ioutil"
 
+	"github.com/kubernetes-incubator/kube-aws/cfnstack"
 	controlplane "github.com/kubernetes-incubator/kube-aws/core/controlplane/config"
 	nodepool "github.com/kubernetes-incubator/kube-aws/core/nodepool/config"
 	"github.com/kubernetes-incubator/kube-aws/model"
@@ -175,12 +173,13 @@ func failFastWhenUnknownKeysFound(vs []unknownKeyValidation) error {
 	return nil
 }
 
-func ConfigFromBytesWithEncryptService(data []byte, plugins []*pluginmodel.Plugin, encryptService controlplane.EncryptService) (*Config, error) {
+func ConfigFromBytesWithStubs(data []byte, plugins []*pluginmodel.Plugin, encryptService controlplane.EncryptService, ec2 cfnstack.EC2Interrogator) (*Config, error) {
 	c, err := ConfigFromBytes(data, plugins)
 	if err != nil {
 		return nil, err
 	}
 	c.ProvidedEncryptService = encryptService
+	c.ProvidedEC2Interrogator = ec2
 
 	// Uses the same encrypt service for node pools for consistency
 	for _, p := range c.NodePools {
