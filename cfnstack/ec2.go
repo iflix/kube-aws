@@ -5,5 +5,5 @@ import (
 )
 
 type EC2Interrogator interface {
-	DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error)
+	DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error)
 }

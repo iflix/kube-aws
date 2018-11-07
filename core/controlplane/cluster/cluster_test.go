@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"github.com/kubernetes-incubator/kube-aws/cfnstack"
 	"github.com/kubernetes-incubator/kube-aws/core/controlplane/config"
 	"github.com/kubernetes-incubator/kube-aws/model"
 	"github.com/kubernetes-incubator/kube-aws/test/helper"
@@ -18,8 +17,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-yaml/yaml"
 	"github.com/kubernetes-incubator/kube-aws/plugin/pluginmodel"
-	yaml "gopkg.in/yaml.v2"
 )
 
 /*
@@ -486,10 +485,10 @@ stackTags:
 				ControllerTmplFile:    "../config/templates/cloud-config-controller",
 				EtcdTmplFile:          "../config/templates/cloud-config-etcd",
 				StackTemplateTmplFile: "../config/templates/stack-template.json",
-				S3URI: "s3://test-bucket/foo/bar",
+				S3URI:                 "s3://test-bucket/foo/bar",
 			}
 
-			cluster, err := NewCluster(clusterConfig, stackTemplateOptions, []*pluginmodel.Plugin{}, false)
+			cluster, err := NewCluster(clusterConfig, stackTemplateOptions, []*pluginmodel.Plugin{}, nil)
 			if !assert.NoError(t, err) {
 				return
 			}
@@ -514,52 +513,6 @@ stackTags:
 			assert.NoError(t, err)
 			assert.Equal(t, "test-bucket/foo/bar/kube-aws/clusters/test-cluster-name/exported/stacks/control-plane/userdata-controller", path, "UserDataController.S3Prefix returned an unexpected value")
 		})
-	}
-}
-
-func TestStackCreationErrorMessaging(t *testing.T) {
-	events := []*cloudformation.StackEvent{
-		&cloudformation.StackEvent{
-			// Failure with all fields set
-			ResourceStatus:       aws.String("CREATE_FAILED"),
-			ResourceType:         aws.String("Computer"),
-			LogicalResourceId:    aws.String("test_comp"),
-			ResourceStatusReason: aws.String("BAD HD"),
-		},
-		&cloudformation.StackEvent{
-			// Success, should not show up
-			ResourceStatus: aws.String("SUCCESS"),
-			ResourceType:   aws.String("Computer"),
-		},
-		&cloudformation.StackEvent{
-			// Failure due to cancellation should not show up
-			ResourceStatus:       aws.String("CREATE_FAILED"),
-			ResourceType:         aws.String("Computer"),
-			ResourceStatusReason: aws.String("Resource creation cancelled"),
-		},
-		&cloudformation.StackEvent{
-			// Failure with missing fields
-			ResourceStatus: aws.String("CREATE_FAILED"),
-			ResourceType:   aws.String("Computer"),
-		},
-	}
-
-	expectedMsgs := []string{
-		"CREATE_FAILED Computer test_comp BAD HD",
-		"CREATE_FAILED Computer",
-	}
-
-	outputMsgs := cfnstack.StackEventErrMsgs(events)
-	if len(expectedMsgs) != len(outputMsgs) {
-		t.Errorf("Expected %d stack error messages, got %d\n",
-			len(expectedMsgs),
-			len(cfnstack.StackEventErrMsgs(events)))
-	}
-
-	for i := range expectedMsgs {
-		if expectedMsgs[i] != outputMsgs[i] {
-			t.Errorf("Expected `%s`, got `%s`\n", expectedMsgs[i], outputMsgs[i])
-		}
 	}
 }
 
@@ -750,11 +703,11 @@ func newDefaultClusterWithDeps(opts config.StackTemplateOptions) (*Cluster, erro
 	cluster.ExternalDNSName = "foo.example.com"
 	cluster.KeyName = "mykey"
 	cluster.S3URI = "s3://mybucket/mydir"
-	cluster.KMSKeyARN = "mykmskey"
+	cluster.KMSKeyARN = "arn:aws:kms:us-west-1:xxxxxxxxx:key/xxxxxxxxxxxxxxxxxxx"
 	if err := cluster.Load(); err != nil {
 		return &Cluster{}, err
 	}
-	return NewCluster(cluster, opts, []*pluginmodel.Plugin{}, false)
+	return NewCluster(cluster, opts, []*pluginmodel.Plugin{}, nil)
 }
 
 func TestRenderStackTemplate(t *testing.T) {
@@ -764,7 +717,7 @@ func TestRenderStackTemplate(t *testing.T) {
 			ControllerTmplFile:    "../config/templates/cloud-config-controller",
 			EtcdTmplFile:          "../config/templates/cloud-config-etcd",
 			StackTemplateTmplFile: "../config/templates/stack-template.json",
-			S3URI: "s3://test-bucket/foo/bar",
+			S3URI:                 "s3://test-bucket/foo/bar",
 		}
 		cluster, err := newDefaultClusterWithDeps(stackTemplateOptions)
 		if assert.NoError(t, err, "Unable to initialize Cluster") {

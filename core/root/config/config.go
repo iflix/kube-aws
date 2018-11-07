@@ -5,14 +5,27 @@ import (
 	"fmt"
 	"io/ioutil"
 
+	"github.com/go-yaml/yaml"
 	"github.com/kubernetes-incubator/kube-aws/cfnstack"
 	controlplane "github.com/kubernetes-incubator/kube-aws/core/controlplane/config"
 	nodepool "github.com/kubernetes-incubator/kube-aws/core/nodepool/config"
 	"github.com/kubernetes-incubator/kube-aws/model"
 	"github.com/kubernetes-incubator/kube-aws/plugin"
 	"github.com/kubernetes-incubator/kube-aws/plugin/pluginmodel"
-	"gopkg.in/yaml.v2"
 )
+
+type InitialConfig struct {
+	AmiId            string
+	AvailabilityZone string
+	ClusterName      string
+	ExternalDNSName  string
+	HostedZoneID     string
+	KMSKeyARN        string
+	KeyName          string
+	NoRecordSet      bool
+	Region           model.Region
+	S3URI            string
+}
 
 type UnmarshalledConfig struct {
 	controlplane.Cluster `yaml:",inline"`
@@ -21,9 +34,10 @@ type UnmarshalledConfig struct {
 }
 
 type Worker struct {
-	APIEndpointName   string                     `yaml:"apiEndpointName,omitempty"`
-	NodePools         []*nodepool.ProvidedConfig `yaml:"nodePools,omitempty"`
-	model.UnknownKeys `yaml:",inline"`
+	APIEndpointName         string                     `yaml:"apiEndpointName,omitempty"`
+	NodePools               []*nodepool.ProvidedConfig `yaml:"nodePools,omitempty"`
+	model.UnknownKeys       `yaml:",inline"`
+	NodePoolRollingStrategy string `yaml:"nodePoolRollingStrategy,omitempty"`
 }
 
 type Config struct {
@@ -95,7 +109,6 @@ func ConfigFromBytes(data []byte, plugins []*pluginmodel.Plugin) (*Config, error
 		if err := np.Taints.Validate(); err != nil {
 			return nil, fmt.Errorf("invalid taints for node pool at index %d: %v", i, err)
 		}
-
 		if np.APIEndpointName == "" {
 			if c.Worker.APIEndpointName == "" {
 				if len(cpConfig.APIEndpoints) > 1 {
@@ -104,6 +117,14 @@ func ConfigFromBytes(data []byte, plugins []*pluginmodel.Plugin) (*Config, error
 				np.APIEndpointName = cpConfig.APIEndpoints.GetDefault().Name
 			} else {
 				np.APIEndpointName = c.Worker.APIEndpointName
+			}
+		}
+
+		if np.NodePoolRollingStrategy != "Parallel" && np.NodePoolRollingStrategy != "Sequential" {
+			if c.Worker.NodePoolRollingStrategy != "" && (c.Worker.NodePoolRollingStrategy == "Sequential" || c.Worker.NodePoolRollingStrategy == "Parallel") {
+				np.NodePoolRollingStrategy = c.Worker.NodePoolRollingStrategy
+			} else {
+				np.NodePoolRollingStrategy = "Parallel"
 			}
 		}
 
@@ -173,13 +194,14 @@ func failFastWhenUnknownKeysFound(vs []unknownKeyValidation) error {
 	return nil
 }
 
-func ConfigFromBytesWithStubs(data []byte, plugins []*pluginmodel.Plugin, encryptService controlplane.EncryptService, ec2 cfnstack.EC2Interrogator) (*Config, error) {
+func ConfigFromBytesWithStubs(data []byte, plugins []*pluginmodel.Plugin, encryptService controlplane.EncryptService, cf cfnstack.CFInterrogator, ec cfnstack.EC2Interrogator) (*Config, error) {
 	c, err := ConfigFromBytes(data, plugins)
 	if err != nil {
 		return nil, err
 	}
 	c.ProvidedEncryptService = encryptService
-	c.ProvidedEC2Interrogator = ec2
+	c.ProvidedCFInterrogator = cf
+	c.ProvidedEC2Interrogator = ec
 
 	// Uses the same encrypt service for node pools for consistency
 	for _, p := range c.NodePools {

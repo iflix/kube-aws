@@ -68,6 +68,9 @@ func TestMainClusterConfig(t *testing.T) {
 				Subnets: model.Subnets{
 					subnet1,
 				},
+				UserSuppliedArgs: model.UserSuppliedArgs{
+					QuotaBackendBytes: model.DefaultQuotaBackendBytes,
+				},
 			},
 		}
 		actual := c.EtcdSettings
@@ -106,9 +109,11 @@ func TestMainClusterConfig(t *testing.T) {
 				},
 			},
 			AuditLog: controlplane_config.AuditLog{
-				Enabled: false,
-				MaxAge:  30,
-				LogPath: "/var/log/kube-apiserver-audit.log",
+				Enabled:   false,
+				LogPath:   "/var/log/kube-apiserver-audit.log",
+				MaxAge:    30,
+				MaxBackup: 1,
+				MaxSize:   100,
 			},
 			Authentication: controlplane_config.Authentication{
 				Webhook: controlplane_config.Webhook{
@@ -125,6 +130,7 @@ func TestMainClusterConfig(t *testing.T) {
 			},
 			ClusterAutoscalerSupport: model.ClusterAutoscalerSupport{
 				Enabled: true,
+				Options: map[string]string{},
 			},
 			TLSBootstrap: controlplane_config.TLSBootstrap{
 				Enabled: false,
@@ -135,7 +141,10 @@ func TestMainClusterConfig(t *testing.T) {
 				Filesystem: "xfs",
 			},
 			KIAMSupport: controlplane_config.KIAMSupport{
-				Enabled: false,
+				Enabled:         false,
+				Image:           model.Image{Repo: "quay.io/uswitch/kiam", Tag: "v2.7", RktPullDocker: false},
+				SessionDuration: "15m",
+				ServerAddresses: controlplane_config.KIAMServerAddresses{ServerAddress: "localhost:443", AgentAddress: "kiam-server:443"},
 			},
 			Kube2IamSupport: controlplane_config.Kube2IamSupport{
 				Enabled: false,
@@ -249,6 +258,36 @@ func TestMainClusterConfig(t *testing.T) {
 		}
 	}
 
+	hasDefaultNodePoolRollingStrategy := func(c *config.Config, t *testing.T) {
+		s := c.NodePools[0].NodePoolRollingStrategy
+
+		if s != "Parallel" {
+			t.Errorf("Default nodePool rolling strategy should be 'Parallel' but is not: %v", s)
+		}
+	}
+
+	hasSpecificNodePoolRollingStrategy := func(expRollingStrategy string) func(c *config.Config, t *testing.T) {
+		return func(c *config.Config, t *testing.T) {
+			actRollingStrategy := c.NodePools[0].NodePoolRollingStrategy
+			if actRollingStrategy != expRollingStrategy {
+				t.Errorf("The nodePool Rolling Strategy (%s) does not match with the expected one: %s", actRollingStrategy, expRollingStrategy)
+			}
+		}
+	}
+
+	hasWorkerAndNodePoolStrategy := func(expWorkerStrategy, expNodePoolStrategy string) func(c *config.Config, t *testing.T) {
+		return func(c *config.Config, t *testing.T) {
+			actWorkerStrategy := c.NodePools[0].NodePoolRollingStrategy
+			actNodePoolStrategy := c.NodePools[1].NodePoolRollingStrategy
+
+			if expWorkerStrategy != actWorkerStrategy {
+				t.Errorf("The nodePool Rolling Strategy (%s) does not match with the expected one: %s", actWorkerStrategy, expWorkerStrategy)
+			}
+			if expNodePoolStrategy != actNodePoolStrategy {
+				t.Errorf("The nodePool Rolling Strategy (%s) does not match with the expected one: %s", actNodePoolStrategy, expNodePoolStrategy)
+			}
+		}
+	}
 	hasPrivateSubnetsWithManagedNGWs := func(numExpectedNum int) func(c *config.Config, t *testing.T) {
 		return func(c *config.Config, t *testing.T) {
 			for i, s := range c.PrivateSubnets() {
@@ -427,6 +466,9 @@ addons:
     enabled: true
   clusterAutoscaler:
     enabled: true
+    options:
+      v: 5
+      test: present
   metricsServer:
     enabled: true
 worker:
@@ -443,8 +485,12 @@ worker:
 						},
 						ClusterAutoscaler: model.ClusterAutoscalerSupport{
 							Enabled: true,
+							Options: map[string]string{"v": "5", "test": "present"},
 						},
 						MetricsServer: model.MetricsServer{
+							Enabled: true,
+						},
+						APIServerAggregator: model.APIServerAggregator{
 							Enabled: true,
 						},
 					}
@@ -791,6 +837,9 @@ etcd:
 							Subnets: model.Subnets{
 								subnet1,
 							},
+							UserSuppliedArgs: model.UserSuppliedArgs{
+								QuotaBackendBytes: model.DefaultQuotaBackendBytes,
+							},
 						},
 					}
 					actual := c.EtcdSettings
@@ -848,6 +897,9 @@ etcd:
 							Subnets: model.Subnets{
 								subnet1,
 							},
+							UserSuppliedArgs: model.UserSuppliedArgs{
+								QuotaBackendBytes: model.DefaultQuotaBackendBytes,
+							},
 						},
 					}
 					actual := c.EtcdSettings
@@ -903,8 +955,12 @@ etcd:
 								Type:      "gp2",
 								IOPS:      0,
 								Ephemeral: false,
-							}, Subnets: model.Subnets{
+							},
+							Subnets: model.Subnets{
 								subnet1,
+							},
+							UserSuppliedArgs: model.UserSuppliedArgs{
+								QuotaBackendBytes: model.DefaultQuotaBackendBytes,
 							},
 						},
 					}
@@ -980,6 +1036,9 @@ etcd:
 							Subnets: model.Subnets{
 								subnet1,
 							},
+							UserSuppliedArgs: model.UserSuppliedArgs{
+								QuotaBackendBytes: model.DefaultQuotaBackendBytes,
+							},
 						},
 					}
 					actual := c.EtcdSettings
@@ -1053,6 +1112,9 @@ etcd:
 							},
 							Subnets: model.Subnets{
 								subnet1,
+							},
+							UserSuppliedArgs: model.UserSuppliedArgs{
+								QuotaBackendBytes: model.DefaultQuotaBackendBytes,
 							},
 						},
 					}
@@ -1131,6 +1193,9 @@ etcd:
 							Subnets: model.Subnets{
 								subnet1,
 							},
+							UserSuppliedArgs: model.UserSuppliedArgs{
+								QuotaBackendBytes: model.DefaultQuotaBackendBytes,
+							},
 						},
 					}
 					actual := c.EtcdSettings
@@ -1208,6 +1273,9 @@ etcd:
 							Subnets: model.Subnets{
 								subnet1,
 							},
+							UserSuppliedArgs: model.UserSuppliedArgs{
+								QuotaBackendBytes: model.DefaultQuotaBackendBytes,
+							},
 						},
 					}
 					actual := c.EtcdSettings
@@ -1252,8 +1320,10 @@ experimental:
       enabled: true
   auditLog:
     enabled: true
-    maxage: 100
-    logpath: "/var/log/audit.log"
+    logPath: "/var/log/audit.log"
+    maxAge: 100
+    maxBackup: 10
+    maxSize: 5
   authentication:
     webhook:
       enabled: true
@@ -1270,7 +1340,7 @@ experimental:
   ephemeralImageStorage:
     enabled: true
   kiamSupport:
-    enabled: true
+    enabled: false
   kube2IamSupport:
     enabled: true
   gpuSupport:
@@ -1336,9 +1406,11 @@ worker:
 							},
 						},
 						AuditLog: controlplane_config.AuditLog{
-							Enabled: true,
-							MaxAge:  100,
-							LogPath: "/var/log/audit.log",
+							Enabled:   true,
+							LogPath:   "/var/log/audit.log",
+							MaxAge:    100,
+							MaxBackup: 10,
+							MaxSize:   5,
 						},
 						Authentication: controlplane_config.Authentication{
 							Webhook: controlplane_config.Webhook{
@@ -1358,6 +1430,7 @@ worker:
 						},
 						ClusterAutoscalerSupport: model.ClusterAutoscalerSupport{
 							Enabled: true,
+							Options: map[string]string{},
 						},
 						TLSBootstrap: controlplane_config.TLSBootstrap{
 							Enabled: true,
@@ -1368,7 +1441,10 @@ worker:
 							Filesystem: "xfs",
 						},
 						KIAMSupport: controlplane_config.KIAMSupport{
-							Enabled: true,
+							Enabled:         false,
+							Image:           model.Image{Repo: "quay.io/uswitch/kiam", Tag: "v2.7", RktPullDocker: false},
+							SessionDuration: "15m",
+							ServerAddresses: controlplane_config.KIAMServerAddresses{ServerAddress: "localhost:443", AgentAddress: "kiam-server:443"},
 						},
 						Kube2IamSupport: controlplane_config.Kube2IamSupport{
 							Enabled: true,
@@ -1505,6 +1581,7 @@ worker:
 						},
 						ClusterAutoscalerSupport: model.ClusterAutoscalerSupport{
 							Enabled: true,
+							Options: map[string]string{},
 						},
 						TLSBootstrap: controlplane_config.TLSBootstrap{
 							Enabled: false,
@@ -1553,7 +1630,71 @@ worker:
 					if !reflect.DeepEqual(expectedTaints, actualTaints) {
 						t.Errorf("worker node taints didn't match: expected=%v, actual=%v", expectedTaints, actualTaints)
 					}
+				},
+			},
+		},
+		{
+			context: "WithExperimentalFeatureKiam",
+			configYaml: minimalValidConfigYaml + `
+experimental:
+  kiamSupport:
+    enabled: true
+    image:
+      repo: quay.io/uswitch/kiam
+      tag: v2.6
+    sessionDuration: 30m	
+    serverAddresses:
+      serverAddress: localhost
+      agentAddress: kiam-server
+worker:
+  nodePools:
+  - name: pool1
+`,
+			assertConfig: []ConfigTester{
+				func(c *config.Config, t *testing.T) {
+					expected := controlplane_config.KIAMSupport{
+						Enabled:         true,
+						Image:           model.Image{Repo: "quay.io/uswitch/kiam", Tag: "v2.6", RktPullDocker: false},
+						SessionDuration: "30m",
+						ServerAddresses: controlplane_config.KIAMServerAddresses{ServerAddress: "localhost", AgentAddress: "kiam-server"},
+					}
 
+					actual := c.Experimental
+
+					if !reflect.DeepEqual(expected, actual.KIAMSupport) {
+						t.Errorf("experimental settings didn't match : expected=%+v actual=%+v", expected, actual)
+					}
+
+					p := c.NodePools[0]
+					if reflect.DeepEqual(expected, p.Experimental.KIAMSupport) {
+						t.Errorf("experimental settings shouldn't be inherited to a node pool but it did : toplevel=%v nodepool=%v", expected, p.Experimental)
+					}
+				},
+			},
+		},
+		{
+			context: "WithExperimentalFeatureKiamForWorkerNodePool",
+			configYaml: minimalValidConfigYaml + `
+worker:
+  nodePools:
+  - name: pool1
+    kiamSupport:
+      enabled: true
+`,
+			assertConfig: []ConfigTester{
+				func(c *config.Config, t *testing.T) {
+					expected := controlplane_config.Experimental{
+						KIAMSupport: controlplane_config.KIAMSupport{
+							Enabled:         true,
+							Image:           model.Image{Repo: "quay.io/uswitch/kiam", Tag: "v2.7", RktPullDocker: false},
+							SessionDuration: "15m",
+							ServerAddresses: controlplane_config.KIAMServerAddresses{ServerAddress: "localhost:443", AgentAddress: "kiam-server:443"},
+						},
+					}
+					p := c.NodePools[0]
+					if reflect.DeepEqual(expected, p.Experimental) {
+						t.Errorf("experimental settings for node pool didn't match : expected=%v actual=%v", expected, p.Experimental)
+					}
 				},
 			},
 		},
@@ -1598,6 +1739,62 @@ worker:
 
 					if !p.Kube2IamSupport.Enabled {
 						t.Errorf("worker node pool's kube2IamSupport should be enabled but was not: %+v", p.Experimental)
+					}
+				},
+			},
+		},
+		{
+			context:    "WithControllerIAMDefaultManageExternally",
+			configYaml: minimalValidConfigYaml,
+			assertConfig: []ConfigTester{
+				func(c *config.Config, t *testing.T) {
+					expectedValue := false
+
+					if c.Controller.IAMConfig.Role.ManageExternally != expectedValue {
+						t.Errorf("controller's iam.role.manageExternally didn't match : expected=%v actual=%v", expectedValue, c.Controller.IAMConfig.Role.ManageExternally)
+					}
+				},
+			},
+		},
+		{
+			context: "WithControllerIAMEnabledManageExternally",
+			configYaml: minimalValidConfigYaml + `
+controller:
+  iam:
+   role:
+     name: myrole1
+     manageExternally: true
+`,
+			assertConfig: []ConfigTester{
+				func(c *config.Config, t *testing.T) {
+					expectedManageExternally := true
+					expectedRoleName := "myrole1"
+
+					if expectedRoleName != c.Controller.IAMConfig.Role.Name {
+						t.Errorf("controller's iam.role.name didn't match : expected=%v actual=%v", expectedRoleName, c.Controller.IAMConfig.Role.Name)
+					}
+
+					if expectedManageExternally != c.Controller.IAMConfig.Role.ManageExternally {
+						t.Errorf("controller's iam.role.manageExternally didn't match : expected=%v actual=%v", expectedManageExternally, c.Controller.IAMConfig.Role.ManageExternally)
+					}
+				},
+			},
+		},
+		{
+			context: "WithControllerIAMEnabledStrictName",
+			configYaml: minimalValidConfigYaml + `
+controller:
+  iam:
+   role:
+     name: myrole1
+     strictName: true
+`,
+			assertConfig: []ConfigTester{
+				func(c *config.Config, t *testing.T) {
+					expectedRoleName := "myrole1"
+
+					if expectedRoleName != c.Controller.IAMConfig.Role.Name {
+						t.Errorf("controller's iam.role.name didn't match : expected=%v actual=%v", expectedRoleName, c.Controller.IAMConfig.Role.Name)
 					}
 				},
 			},
@@ -1686,6 +1883,53 @@ worker:
 						t.Errorf("waitSignal.maxBatchSize should be 2 for node pool at index %d but was %d", 1, c.NodePools[1].WaitSignal.MaxBatchSize())
 					}
 				},
+			},
+		},
+		{
+			context: "WithDefaultNodePoolRollingStrategy",
+			configYaml: minimalValidConfigYaml + `
+worker:
+  nodePools:
+  - name: pool1
+`,
+			assertConfig: []ConfigTester{
+				hasDefaultNodePoolRollingStrategy,
+			},
+		},
+		{
+			context: "WithSpecificNodePoolRollingStrategy",
+			configYaml: minimalValidConfigYaml + `
+worker:
+  nodePools:
+  - name: pool1
+    nodePoolRollingStrategy: Sequential`,
+			assertConfig: []ConfigTester{
+				hasSpecificNodePoolRollingStrategy("Sequential"),
+			},
+		},
+		{
+			context: "WithSpecificWorkerRollingStrategy",
+			configYaml: minimalValidConfigYaml + `
+worker:
+  nodePoolRollingStrategy: Sequential
+  nodePools:
+  - name: pool1`,
+			assertConfig: []ConfigTester{
+				hasSpecificNodePoolRollingStrategy("Sequential"),
+			},
+		},
+		{
+			context: "WithWorkerAndNodePoolStrategy",
+			configYaml: minimalValidConfigYaml + `
+worker:
+  nodePoolRollingStrategy: Sequential
+  nodePools:
+  - name: pool1
+  - name: pool2
+    nodePoolRollingStrategy: Parallel
+`,
+			assertConfig: []ConfigTester{
+				hasWorkerAndNodePoolStrategy("Sequential", "Parallel"),
 			},
 		},
 		{
@@ -1858,16 +2102,16 @@ apiEndpoints:
 				func(rootCluster root.Cluster, t *testing.T) {
 					c := rootCluster.ControlPlane()
 
-					private1 := model.NewPrivateSubnet("us-west-1a", "10.0.1.0/24")
+					private1 := model.NewPrivateSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-PrivateSubnet1"}}`)
 					private1.Name = "privateSubnet1"
 
-					private2 := model.NewPrivateSubnet("us-west-1b", "10.0.2.0/24")
+					private2 := model.NewPrivateSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-PrivateSubnet2"}}`)
 					private2.Name = "privateSubnet2"
 
-					public1 := model.NewPublicSubnet("us-west-1a", "10.0.3.0/24")
+					public1 := model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-PublicSubnet1"}}`)
 					public1.Name = "publicSubnet1"
 
-					public2 := model.NewPublicSubnet("us-west-1b", "10.0.4.0/24")
+					public2 := model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-PublicSubnet2"}}`)
 					public2.Name = "publicSubnet2"
 
 					subnets := model.Subnets{
@@ -2045,8 +2289,8 @@ worker:
 						public2,
 					}
 					importedPublicSubnets := model.Subnets{
-						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
-						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
+						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public1"}}`),
+						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public2"}}`),
 					}
 
 					p := c.NodePools[0]
@@ -2230,8 +2474,8 @@ worker:
 					}
 
 					importedPublicSubnets := model.Subnets{
-						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
-						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
+						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public1"}}`),
+						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public2"}}`),
 					}
 					p := c.NodePools[0]
 					if !reflect.DeepEqual(p.Subnets, importedPublicSubnets) {
@@ -2335,8 +2579,8 @@ worker:
 						private2,
 					}
 					importedPublicSubnets := model.Subnets{
-						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
-						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
+						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public1"}}`),
+						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public2"}}`),
 					}
 
 					if !reflect.DeepEqual(c.AllSubnets(), subnets) {
@@ -2599,8 +2843,8 @@ worker:
 						private2,
 					}
 					importedPublicSubnets := model.Subnets{
-						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
-						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
+						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public1"}}`),
+						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public2"}}`),
 					}
 
 					if !reflect.DeepEqual(c.AllSubnets(), subnets) {
@@ -2701,8 +2945,8 @@ worker:
 						private2,
 					}
 					importedPublicSubnets := model.Subnets{
-						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public1"}}`),
-						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${ControlPlaneStackName}-Public2"}}`),
+						model.NewPublicSubnetFromFn("us-west-1a", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public1"}}`),
+						model.NewPublicSubnetFromFn("us-west-1b", `{"Fn::ImportValue":{"Fn::Sub":"${NetworkStackName}-Public2"}}`),
 					}
 
 					if !reflect.DeepEqual(c.AllSubnets(), subnets) {
@@ -3018,6 +3262,9 @@ subnets:
 								Ephemeral: false,
 							},
 							Subnets: subnets,
+							UserSuppliedArgs: model.UserSuppliedArgs{
+								QuotaBackendBytes: model.DefaultQuotaBackendBytes,
+							},
 						},
 					}
 					actual := c.EtcdSettings
@@ -3152,7 +3399,7 @@ worker:
 
 					expectedWorkerSecurityGroupRefs := []string{
 						`"sg-12345678"`, `"sg-abcdefab"`, `"sg-23456789"`, `"sg-bcdefabc"`,
-						`{"Fn::ImportValue" : {"Fn::Sub" : "${ControlPlaneStackName}-WorkerSecurityGroup"}}`,
+						`{"Fn::ImportValue" : {"Fn::Sub" : "${NetworkStackName}-WorkerSecurityGroup"}}`,
 					}
 					if !reflect.DeepEqual(p.SecurityGroupRefs(), expectedWorkerSecurityGroupRefs) {
 						t.Errorf("SecurityGroupRefs didn't match: expected=%v actual=%v", expectedWorkerSecurityGroupRefs, p.SecurityGroupRefs())
@@ -3195,7 +3442,7 @@ worker:
 
 					expectedWorkerSecurityGroupRefs := []string{
 						`"sg-23456789"`, `"sg-bcdefabc"`, `"sg-12345678"`, `"sg-abcdefab"`,
-						`{"Fn::ImportValue" : {"Fn::Sub" : "${ControlPlaneStackName}-WorkerSecurityGroup"}}`,
+						`{"Fn::ImportValue" : {"Fn::Sub" : "${NetworkStackName}-WorkerSecurityGroup"}}`,
 					}
 					if !reflect.DeepEqual(p.SecurityGroupRefs(), expectedWorkerSecurityGroupRefs) {
 						t.Errorf("SecurityGroupRefs didn't match: expected=%v actual=%v", expectedWorkerSecurityGroupRefs, p.SecurityGroupRefs())
@@ -3238,7 +3485,7 @@ worker:
 
 					expectedWorkerSecurityGroupRefs := []string{
 						`"sg-23456789"`, `"sg-bcdefabc"`, `"sg-12345678"`, `"sg-abcdefab"`,
-						`{"Fn::ImportValue" : {"Fn::Sub" : "${ControlPlaneStackName}-WorkerSecurityGroup"}}`,
+						`{"Fn::ImportValue" : {"Fn::Sub" : "${NetworkStackName}-WorkerSecurityGroup"}}`,
 					}
 					if !reflect.DeepEqual(p.SecurityGroupRefs(), expectedWorkerSecurityGroupRefs) {
 						t.Errorf("SecurityGroupRefs didn't match: expected=%v actual=%v", expectedWorkerSecurityGroupRefs, p.SecurityGroupRefs())
@@ -3418,7 +3665,7 @@ worker:
 			configBytes := validCase.configYaml
 			// TODO Allow including plugins in test data?
 			plugins := []*pluginmodel.Plugin{}
-			providedConfig, err := config.ConfigFromBytesWithStubs([]byte(configBytes), plugins, helper.DummyEncryptService{}, helper.DummyEC2Interrogator{})
+			providedConfig, err := config.ConfigFromBytesWithStubs([]byte(configBytes), plugins, helper.DummyEncryptService{}, helper.DummyCFInterrogator{}, helper.DummyEC2Interrogator{})
 			if err != nil {
 				t.Errorf("failed to parse config %s: %v", configBytes, err)
 				t.FailNow()
@@ -3434,11 +3681,13 @@ worker:
 				var stackTemplateOptions = root.NewOptions(false, false)
 				stackTemplateOptions.AssetsDir = dummyAssetsDir
 				stackTemplateOptions.ControllerTmplFile = "../../core/controlplane/config/templates/cloud-config-controller"
-				stackTemplateOptions.WorkerTmplFile = "../../core/controlplane/config/templates/cloud-config-worker"
-				stackTemplateOptions.EtcdTmplFile = "../../core/controlplane/config/templates/cloud-config-etcd"
+				stackTemplateOptions.WorkerTmplFile = "../../core/nodepool/config/templates/cloud-config-worker"
+				stackTemplateOptions.EtcdTmplFile = "../../core/etcd/config/templates/cloud-config-etcd"
 				stackTemplateOptions.RootStackTemplateTmplFile = "../../core/root/config/templates/stack-template.json"
 				stackTemplateOptions.NodePoolStackTemplateTmplFile = "../../core/nodepool/config/templates/stack-template.json"
 				stackTemplateOptions.ControlPlaneStackTemplateTmplFile = "../../core/controlplane/config/templates/stack-template.json"
+				stackTemplateOptions.NetworkStackTemplateTmplFile = "../../core/network/config/templates/stack-template.json"
+				stackTemplateOptions.EtcdStackTemplateTmplFile = "../../core/etcd/config/templates/stack-template.json"
 
 				cluster, err := root.ClusterFromConfig(providedConfig, stackTemplateOptions, false)
 				if err != nil {
@@ -4292,7 +4541,7 @@ controller:
     role:
       name: foobarba-foobarba-foobarba-foobarba-foobarba-foobarba
 `,
-			expectedErrorMessage: "IAM role name(=ap-northeast-1-foobarba-foobarba-foobarba-foobarba-foobarba-foobarba) will be 68 characters long. It exceeds the AWS limit of 64 characters: region name(=ap-northeast-1) + managed iam role name(=foobarba-foobarba-foobarba-foobarba-foobarba-foobarba) should be less than or equal to 49",
+			expectedErrorMessage: "IAM role name(=kubeaws-it-main-ap-northeast-1-foobarba-foobarba-foobarba-foobarba-foobarba-foobarba) will be 84 characters long. It exceeds the AWS limit of 64 characters: clusterName(=kubeaws-it-main) + region name(=ap-northeast-1) + managed iam role name(=foobarba-foobarba-foobarba-foobarba-foobarba-foobarba) should be less than or equal to 33",
 		},
 		{
 			context: "WithTooLongWorkerIAMRoleName",
@@ -4304,7 +4553,7 @@ worker:
       role:
         name: foobarba-foobarba-foobarba-foobarba-foobarba-foobarbazzz
 `,
-			expectedErrorMessage: "IAM role name(=ap-northeast-1-foobarba-foobarba-foobarba-foobarba-foobarba-foobarbazzz) will be 71 characters long. It exceeds the AWS limit of 64 characters: region name(=ap-northeast-1) + managed iam role name(=foobarba-foobarba-foobarba-foobarba-foobarba-foobarbazzz) should be less than or equal to 49",
+			expectedErrorMessage: "IAM role name(=kubeaws-it-main-ap-northeast-1-foobarba-foobarba-foobarba-foobarba-foobarba-foobarbazzz) will be 87 characters long. It exceeds the AWS limit of 64 characters: clusterName(=kubeaws-it-main) + region name(=ap-northeast-1) + managed iam role name(=foobarba-foobarba-foobarba-foobarba-foobarba-foobarbazzz) should be less than or equal to 33",
 		},
 		{
 			context: "WithInvalidEtcdInstanceProfileArn",

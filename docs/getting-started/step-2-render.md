@@ -53,7 +53,7 @@ The command varies among AWS regions.
 For the us-east-1 region:
 
 ```sh
-$ aws s3api --region=<your-region> create-bucket --bucket <your-bucket-name>
+$ aws s3api --region=us-east-1 create-bucket --bucket <your-bucket-name>
 {
     "Location": "/<your-bucket-name>"
 }
@@ -349,6 +349,7 @@ This includes the certificate authority, signed server certificates for the Kube
   Additionally, the certificate must have the following Subject Alternative Names (SANs).
   These IPs and DNS names are used within the cluster to route from applications to the Kubernetes API:
 
+    - 127.0.0.1
     - 10.0.0.50
     - 10.3.0.1
     - kubernetes

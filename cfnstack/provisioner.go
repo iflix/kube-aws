@@ -3,13 +3,15 @@ package cfnstack
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudformation"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/kubernetes-incubator/kube-aws/logger"
 	"github.com/kubernetes-incubator/kube-aws/model"
-	"strings"
-	"time"
 )
 
 type Provisioner struct {
@@ -159,9 +161,17 @@ func (c *Provisioner) createStackFromTemplateURL(cfSvc CreationService, stackTem
 }
 
 func (c *Provisioner) baseUpdateStackInput() *cloudformation.UpdateStackInput {
+	var tags []*cloudformation.Tag
+	for k, v := range c.stackTags {
+		key := k
+		value := v
+		tags = append(tags, &cloudformation.Tag{Key: &key, Value: &value})
+	}
+
 	input := &cloudformation.UpdateStackInput{
 		Capabilities: []*string{aws.String(cloudformation.CapabilityCapabilityIam), aws.String(cloudformation.CapabilityCapabilityNamedIam)},
 		StackName:    aws.String(c.stackName),
+		Tags:         tags,
 	}
 	if c.roleARN != "" {
 		input = input.SetRoleARN(c.roleARN)
@@ -223,7 +233,7 @@ func (c *Provisioner) ValidateStackAtURL(templateURL string) (string, error) {
 	cfSvc := cloudformation.New(c.session)
 	validationReport, err := cfSvc.ValidateTemplate(&validateInput)
 	if err != nil {
-		return "", fmt.Errorf("invalid cloudformation stack: %v", err)
+		return "", fmt.Errorf("invalid cloudformation stack template %s: %v", templateURL, err)
 	}
 
 	return validationReport.String(), nil
@@ -306,9 +316,9 @@ func eventPrettyPrint(e cloudformation.StackEvent, n string, t time.Time) {
 	s := int((*e.Timestamp).Sub(t).Seconds())
 	d := fmt.Sprintf("+%.2d:%.2d:%.2d", s/3600, (s/60)%60, s%60)
 	if e.ResourceStatusReason != nil {
-		fmt.Printf("%s%s\t%s\t\t%s\t\"%s\"\n", d, n, resize(*e.ResourceStatus, 24), resize(*e.LogicalResourceId, 22), *e.ResourceStatusReason)
+		logger.Infof("%s%s\t%s\t\t%s\t\"%s\"\n", d, n, resize(*e.ResourceStatus, 24), resize(*e.LogicalResourceId, 22), *e.ResourceStatusReason)
 	} else {
-		fmt.Printf("%s%s\t%s\t\t%s\n", d, n, resize(*e.ResourceStatus, 24), resize(*e.LogicalResourceId, 22))
+		logger.Infof("%s%s\t%s\t\t%s\n", d, n, resize(*e.ResourceStatus, 24), resize(*e.LogicalResourceId, 22))
 	}
 }
 
