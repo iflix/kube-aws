@@ -6,12 +6,14 @@ import (
 	"strings"
 
 	"github.com/kubernetes-incubator/kube-aws/filereader/jsontemplate"
+	"github.com/kubernetes-incubator/kube-aws/logger"
 	"github.com/kubernetes-incubator/kube-aws/model"
 )
 
 // StackConfig contains configuration parameters available when rendering CFN stack template from golang text templates
 type StackConfig struct {
 	*Config
+	StackName string
 	StackTemplateOptions
 	UserDataController    model.UserData
 	UserDataEtcd          model.UserData
@@ -62,6 +64,7 @@ func (c *StackConfig) RenderStackTemplateAsBytes() ([]byte, error) {
 }
 
 func (c *StackConfig) RenderStackTemplateAsString() (string, error) {
+	logger.Debugf("Called RenderStackTemplateAsString on %s", c.StackName)
 	bytes, err := c.RenderStackTemplateAsBytes()
 	return string(bytes), err
 }

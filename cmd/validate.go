@@ -2,9 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-
 	"github.com/kubernetes-incubator/kube-aws/core/root"
+	"github.com/kubernetes-incubator/kube-aws/logger"
 	"github.com/spf13/cobra"
 )
 
@@ -19,6 +18,7 @@ var (
 
 	validateOpts = struct {
 		awsDebug, skipWait bool
+		targets            []string
 	}{}
 )
 
@@ -30,6 +30,11 @@ func init() {
 		false,
 		"Log debug information from aws-sdk-go library",
 	)
+	cmdValidate.Flags().StringSliceVar(
+		&validateOpts.targets,
+		"targets",
+		root.AllOperationTargetsAsStringSlice(),
+		"Validate nothing but specified sub-stacks. Specify `all` or any combination of `etcd`, `control-plane`, and node pool names. Defaults to `all`")
 }
 
 func runCmdValidate(_ *cobra.Command, _ []string) error {
@@ -37,20 +42,22 @@ func runCmdValidate(_ *cobra.Command, _ []string) error {
 
 	cluster, err := root.ClusterFromFile(configPath, opts, validateOpts.awsDebug)
 	if err != nil {
-		return fmt.Errorf("Failed to initialize cluster driver: %v", err)
+		return fmt.Errorf("failed to initialize cluster driver: %v", err)
 	}
 
-	fmt.Printf("Validating UserData and stack template...\n")
-	report, err := cluster.ValidateStack()
+	logger.Info("Validating UserData and stack template...\n")
+
+	targets := root.OperationTargetsFromStringSlice(validateOpts.targets)
+
+	report, err := cluster.ValidateStack(targets)
 	if report != "" {
-		fmt.Fprintf(os.Stderr, "Validation Report: %s\n", report)
+		logger.Infof("Validation Report: %s\n", report)
 	}
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("stack template is valid.\n\n")
-	fmt.Println("Validation OK!")
-
+	logger.Info("stack template is valid.\n\n")
+	logger.Info("Validation OK!")
 	return nil
 }

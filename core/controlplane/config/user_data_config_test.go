@@ -102,10 +102,6 @@ func TestCloudConfigTemplating(t *testing.T) {
 		Template []byte
 	}{
 		{
-			Name:     "CloudConfigEtcd",
-			Template: CloudConfigEtcd,
-		},
-		{
 			Name:     "CloudConfigController",
 			Template: CloudConfigController,
 		},

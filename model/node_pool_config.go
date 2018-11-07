@@ -2,6 +2,8 @@ package model
 
 import (
 	"fmt"
+
+	"github.com/kubernetes-incubator/kube-aws/logger"
 )
 
 type NodePoolConfig struct {
@@ -14,12 +16,14 @@ type NodePoolConfig struct {
 	SecurityGroupIds          []string               `yaml:"securityGroupIds,omitempty"`
 	CustomSettings            map[string]interface{} `yaml:"customSettings,omitempty"`
 	VolumeMounts              []VolumeMount          `yaml:"volumeMounts,omitempty"`
-	UnknownKeys               `yaml:",inline"`
+	Raid0Mounts               []Raid0Mount           `yaml:"raid0Mounts,omitempty"`
 	NodeSettings              `yaml:",inline"`
 	NodeStatusUpdateFrequency string              `yaml:"nodeStatusUpdateFrequency"`
 	CustomFiles               []CustomFile        `yaml:"customFiles,omitempty"`
 	CustomSystemdUnits        []CustomSystemdUnit `yaml:"customSystemdUnits,omitempty"`
 	Gpu                       Gpu                 `yaml:"gpu"`
+	NodePoolRollingStrategy   string              `yaml:"nodePoolRollingStrategy,omitempty"`
+	UnknownKeys               `yaml:",inline"`
 }
 
 type ClusterAutoscaler struct {
@@ -97,8 +101,13 @@ func (c NodePoolConfig) Validate(experimentalGpuSupportEnabled bool) error {
 		return err
 	}
 
+	// c.VolumeMounts are supplied to check for device and path overlaps with contents of c.Raid0Mounts.
+	if err := ValidateRaid0Mounts(c.VolumeMounts, c.Raid0Mounts); err != nil {
+		return err
+	}
+
 	if c.InstanceType == "t2.micro" || c.InstanceType == "t2.nano" {
-		fmt.Println(`WARNING: instance types "t2.nano" and "t2.micro" are not recommended. See https://github.com/kubernetes-incubator/kube-aws/issues/258 for more information`)
+		logger.Warnf(`instance types "t2.nano" and "t2.micro" are not recommended. See https://github.com/kubernetes-incubator/kube-aws/issues/258 for more information`)
 	}
 
 	if err := c.IAMConfig.Validate(); err != nil {

@@ -3,7 +3,13 @@ package model
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+)
+
+const (
+	MaxQuotaBackendBytes     int = 8 * 1024 * 1024 * 1024
+	DefaultQuotaBackendBytes int = 2 * 1024 * 1024 * 1024
 )
 
 type Etcd struct {
@@ -12,12 +18,15 @@ type Etcd struct {
 	CustomSystemdUnits []CustomSystemdUnit  `yaml:"customSystemdUnits,omitempty"`
 	DataVolume         DataVolume           `yaml:"dataVolume,omitempty"`
 	DisasterRecovery   EtcdDisasterRecovery `yaml:"disasterRecovery,omitempty"`
+	VolumeMounts       []VolumeMount        `yaml:"volumeMounts,omitempty"`
 	EC2Instance        `yaml:",inline"`
-	IAMConfig          IAMConfig    `yaml:"iam,omitempty"`
-	Nodes              []EtcdNode   `yaml:"nodes,omitempty"`
-	SecurityGroupIds   []string     `yaml:"securityGroupIds"`
-	Snapshot           EtcdSnapshot `yaml:"snapshot,omitempty"`
-	Subnets            Subnets      `yaml:"subnets,omitempty"`
+	UserSuppliedArgs   UserSuppliedArgs `yaml:"userSuppliedArgs,omitempty"`
+	IAMConfig          IAMConfig        `yaml:"iam,omitempty"`
+	Nodes              []EtcdNode       `yaml:"nodes,omitempty"`
+	SecurityGroupIds   []string         `yaml:"securityGroupIds"`
+	Snapshot           EtcdSnapshot     `yaml:"snapshot,omitempty"`
+	Subnets            Subnets          `yaml:"subnets,omitempty"`
+	StackExists        bool
 	UnknownKeys        `yaml:",inline"`
 }
 
@@ -25,6 +34,11 @@ type EtcdVersion string
 
 type EtcdDisasterRecovery struct {
 	Automated bool `yaml:"automated,omitempty"`
+}
+
+type UserSuppliedArgs struct {
+	QuotaBackendBytes       int `yaml:"quotaBackendBytes,omitempty"`
+	AutoCompactionRetention int `yaml:"autoCompactionRetention,omitempty"`
 }
 
 // Supported returns true when the disaster recovery feature provided by etcdadm can be enabled on the specified version of etcd
@@ -61,9 +75,14 @@ func NewDefaultEtcd() Etcd {
 			Type: "gp2",
 			IOPS: 0,
 		},
+		StackExists: false,
+		UserSuppliedArgs: UserSuppliedArgs{
+			QuotaBackendBytes: DefaultQuotaBackendBytes,
+		},
 	}
 }
-func (i Etcd) LogicalName() string {
+
+func (e Etcd) LogicalName() string {
 	return "Etcd"
 }
 
@@ -135,7 +154,7 @@ func (e Etcd) SecurityGroupRefs() []string {
 
 	refs = append(
 		refs,
-		`{"Ref":"SecurityGroupEtcd"}`,
+		`{"Fn::ImportValue" : {"Fn::Sub" : "${NetworkStackName}-EtcdSecurityGroup"}}`,
 	)
 
 	return refs
@@ -146,6 +165,39 @@ func (e Etcd) SystemdUnitName() string {
 		return "etcd-member.service"
 	}
 	return "etcd2.service"
+}
+
+func ValidateQuotaBackendBytes(bytes int) error {
+	if bytes > MaxQuotaBackendBytes {
+		return fmt.Errorf("quotaBackendBytes: %v is higher than the maximum allowed value 8,589,934,592", bytes)
+	}
+	return nil
+}
+
+func (e Etcd) Validate() error {
+	if err := ValidateVolumeMounts(e.VolumeMounts); err != nil {
+		return err
+	}
+
+	if err := ValidateQuotaBackendBytes(e.UserSuppliedArgs.QuotaBackendBytes); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (e Etcd) FormatOpts() string {
+	opts := []string{}
+	if e.UserSuppliedArgs.QuotaBackendBytes != 0 {
+		quotaFlag := []string{"--quota-backend-bytes", strconv.Itoa(e.UserSuppliedArgs.QuotaBackendBytes)}
+		opts = append(opts, strings.Join(quotaFlag, "="))
+	}
+
+	if e.UserSuppliedArgs.AutoCompactionRetention != 0 {
+		compactFlag := []string{"--auto-compaction-retention", strconv.Itoa(e.UserSuppliedArgs.AutoCompactionRetention)}
+		opts = append(opts, strings.Join(compactFlag, "="))
+	}
+	return strings.Join(opts, " ")
 }
 
 // Version returns the version of etcd (e.g. `3.2.1`) to be used for this etcd cluster

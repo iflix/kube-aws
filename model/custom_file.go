@@ -1,11 +1,13 @@
 package model
 
 import (
-	"bytes"
 	"fmt"
+	"strings"
 	"text/template"
 
+	"github.com/kubernetes-incubator/kube-aws/filereader/texttemplate"
 	"github.com/kubernetes-incubator/kube-aws/gzipcompressor"
+	"github.com/kubernetes-incubator/kube-aws/logger"
 )
 
 type CustomFile struct {
@@ -53,9 +55,9 @@ func (c CustomFile) customFileHasTemplate() bool {
 }
 
 func (c CustomFile) renderTemplate(ctx interface{}) (string, error) {
-	var buf bytes.Buffer
+	var buf strings.Builder
 
-	tmpl, err := template.New("").Parse(c.Template)
+	tmpl, err := texttemplate.Parse("template", c.Template, template.FuncMap{})
 	if err != nil {
 		return "", fmt.Errorf("failed to parse CustomFile template %s: %v", c.Path, err)
 	}
@@ -64,5 +66,6 @@ func (c CustomFile) renderTemplate(ctx interface{}) (string, error) {
 		return "", fmt.Errorf("error rendering CustomFile template %s: %v", c.Path, err)
 	}
 
+	logger.Debugf("successfully rendered CustomFile template %s", c.Path)
 	return buf.String(), nil
 }

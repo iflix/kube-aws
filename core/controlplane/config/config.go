@@ -12,30 +12,40 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Masterminds/semver"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/go-yaml/yaml"
 	"github.com/kubernetes-incubator/kube-aws/cfnresource"
 	"github.com/kubernetes-incubator/kube-aws/cfnstack"
 	"github.com/kubernetes-incubator/kube-aws/coreos/amiregistry"
 	"github.com/kubernetes-incubator/kube-aws/gzipcompressor"
+	"github.com/kubernetes-incubator/kube-aws/logger"
 	"github.com/kubernetes-incubator/kube-aws/model"
 	"github.com/kubernetes-incubator/kube-aws/model/derived"
+	"github.com/kubernetes-incubator/kube-aws/naming"
 	"github.com/kubernetes-incubator/kube-aws/netutil"
 	"github.com/kubernetes-incubator/kube-aws/node"
 	"github.com/kubernetes-incubator/kube-aws/plugin/pluginmodel"
-	yaml "gopkg.in/yaml.v2"
 )
 
 const (
-	k8sVer = "v1.9.3"
+	k8sVer = "v1.10.5"
 
 	credentialsDir = "credentials"
 	userDataDir    = "userdata"
 
 	// Experimental SelfHosting feature default images.
-	kubeNetworkingSelfHostingDefaultCalicoNodeImageTag = "v3.0.6"
-	kubeNetworkingSelfHostingDefaultCalicoCniImageTag  = "v2.0.5"
+	kubeNetworkingSelfHostingDefaultCalicoNodeImageTag = "v3.1.3"
+	kubeNetworkingSelfHostingDefaultCalicoCniImageTag  = "v3.1.3"
 	kubeNetworkingSelfHostingDefaultFlannelImageTag    = "v0.9.1"
 	kubeNetworkingSelfHostingDefaultFlannelCniImageTag = "v0.3.0"
-	kubeNetworkingSelfHostingDefaultTyphaImageTag      = "v0.6.4"
+	kubeNetworkingSelfHostingDefaultTyphaImageTag      = "v0.7.4"
+
+	// ControlPlaneStackName is the logical name of a CloudFormation stack resource in a root stack template
+	// This is not needed to be unique in an AWS account because the actual name of a nested stack is generated randomly
+	// by CloudFormation by including the logical name.
+	// This is NOT intended to be used to reference stack name from cloud-config as the target of awscli or cfn-bootstrap-tools commands e.g. `cfn-init` and `cfn-signal`
+	ControlPlaneStackName = "control-plane"
 )
 
 func NewDefaultCluster() *Cluster {
@@ -43,6 +53,8 @@ func NewDefaultCluster() *Cluster {
 		RotateCerts: RotateCerts{
 			Enabled: false,
 		},
+		SystemReservedResources: "",
+		KubeReservedResources:   "",
 	}
 	experimental := Experimental{
 		Admission: Admission{
@@ -75,9 +87,11 @@ func NewDefaultCluster() *Cluster {
 			},
 		},
 		AuditLog: AuditLog{
-			Enabled: false,
-			MaxAge:  30,
-			LogPath: "/var/log/kube-apiserver-audit.log",
+			Enabled:   false,
+			LogPath:   "/var/log/kube-apiserver-audit.log",
+			MaxAge:    30,
+			MaxBackup: 1,
+			MaxSize:   100,
 		},
 		Authentication: Authentication{
 			Webhook{
@@ -94,6 +108,7 @@ func NewDefaultCluster() *Cluster {
 		},
 		ClusterAutoscalerSupport: model.ClusterAutoscalerSupport{
 			Enabled: true,
+			Options: map[string]string{},
 		},
 		TLSBootstrap: TLSBootstrap{
 			Enabled: false,
@@ -105,6 +120,12 @@ func NewDefaultCluster() *Cluster {
 			Enabled:    false,
 			Disk:       "xvdb",
 			Filesystem: "xfs",
+		},
+		KIAMSupport: KIAMSupport{
+			Enabled:         false,
+			Image:           model.Image{Repo: "quay.io/uswitch/kiam", Tag: "v2.7", RktPullDocker: false},
+			SessionDuration: "15m",
+			ServerAddresses: KIAMServerAddresses{ServerAddress: "localhost:443", AgentAddress: "kiam-server:443"},
 		},
 		Kube2IamSupport: Kube2IamSupport{
 			Enabled: false,
@@ -147,6 +168,7 @@ func NewDefaultCluster() *Cluster {
 			ClusterName:        "kubernetes",
 			VPCCIDR:            "10.0.0.0/16",
 			ReleaseChannel:     "stable",
+			KubeAWSVersion:     "UNKNOWN",
 			K8sVer:             k8sVer,
 			ContainerRuntime:   "docker",
 			Subnets:            []model.Subnet{},
@@ -168,10 +190,15 @@ func NewDefaultCluster() *Cluster {
 					interval: 60,
 				},
 			},
+			HostOS: HostOS{
+				BashPrompt: model.NewDefaultBashPrompt(),
+				MOTDBanner: model.NewDefaultMOTDBanner(),
+			},
 			KubeProxy: KubeProxy{
 				IPVSMode: ipvsMode,
 			},
 			KubeDns: KubeDns{
+				Provider:            "kube-dns",
 				NodeLocalResolver:   false,
 				DeployToControllers: false,
 				Autoscaler: KubeDnsAutoscaler{
@@ -180,14 +207,19 @@ func NewDefaultCluster() *Cluster {
 					Min:             2,
 				},
 			},
+			KubeSystemNamespaceLabels: make(map[string]string),
 			KubernetesDashboard: KubernetesDashboard{
 				AdminPrivileges: true,
 				InsecureLogin:   false,
+				Enabled:         true,
 			},
 			Kubernetes: Kubernetes{
+				EncryptionAtRest: EncryptionAtRest{
+					Enabled: false,
+				},
 				Networking: Networking{
 					SelfHosting: SelfHosting{
-						Enabled:         false,
+						Enabled:         true,
 						Type:            "canal",
 						Typha:           false,
 						CalicoNodeImage: model.Image{Repo: "quay.io/calico/node", Tag: kubeNetworkingSelfHostingDefaultCalicoNodeImageTag, RktPullDocker: false},
@@ -207,7 +239,7 @@ func NewDefaultCluster() *Cluster {
 			CalicoCtlImage:                     model.Image{Repo: "quay.io/calico/ctl", Tag: "v1.6.3", RktPullDocker: false},
 			ClusterAutoscalerImage:             model.Image{Repo: "k8s.gcr.io/cluster-autoscaler", Tag: "v1.1.0", RktPullDocker: false},
 			ClusterProportionalAutoscalerImage: model.Image{Repo: "k8s.gcr.io/cluster-proportional-autoscaler-amd64", Tag: "1.1.2", RktPullDocker: false},
-			KIAMImage:                          model.Image{Repo: "quay.io/uswitch/kiam", Tag: "v2.6", RktPullDocker: false},
+			CoreDnsImage:                       model.Image{Repo: "coredns/coredns", Tag: "1.1.3", RktPullDocker: false},
 			Kube2IAMImage:                      model.Image{Repo: "jtblin/kube2iam", Tag: "0.9.0", RktPullDocker: false},
 			KubeDnsImage:                       model.Image{Repo: "k8s.gcr.io/k8s-dns-kube-dns-amd64", Tag: "1.14.7", RktPullDocker: false},
 			KubeDnsMasqImage:                   model.Image{Repo: "k8s.gcr.io/k8s-dns-dnsmasq-nanny-amd64", Tag: "1.14.7", RktPullDocker: false},
@@ -225,7 +257,9 @@ func NewDefaultCluster() *Cluster {
 			JournaldCloudWatchLogsImage:        model.Image{Repo: "jollinshead/journald-cloudwatch-logs", Tag: "0.1", RktPullDocker: true},
 		},
 		KubeClusterSettings: KubeClusterSettings{
+			PodCIDR:      "10.2.0.0/16",
 			DNSServiceIP: "10.3.0.10",
+			ServiceCIDR:  "10.3.0.0/24",
 		},
 		DefaultWorkerSettings: DefaultWorkerSettings{
 			WorkerCreateTimeout:    "PT15M",
@@ -242,11 +276,6 @@ func NewDefaultCluster() *Cluster {
 		EtcdSettings: EtcdSettings{
 			Etcd: model.NewDefaultEtcd(),
 		},
-		FlannelSettings: FlannelSettings{
-			PodCIDR: "10.2.0.0/16",
-		},
-		// for kube-apiserver
-		ServiceCIDR: "10.3.0.0/24",
 		// for base cloudformation stack
 		TLSCADurationDays:           365 * 10,
 		TLSCertDurationDays:         365,
@@ -320,39 +349,18 @@ func (c *Cluster) Load() error {
 		return fmt.Errorf("invalid cluster: %v", err)
 	}
 
-	if c.ExternalDNSName != "" {
-		// TODO: Deprecate externalDNSName?
-
-		if len(c.APIEndpointConfigs) != 0 {
-			return errors.New("invalid cluster: you can only specify either externalDNSName or apiEndpoints, but not both")
-		}
-
-		subnetRefs := []model.SubnetReference{}
-		for _, s := range c.Controller.LoadBalancer.Subnets {
-			subnetRefs = append(subnetRefs, model.SubnetReference{Name: s.Name})
-		}
-
-		c.APIEndpointConfigs = model.NewDefaultAPIEndpoints(
-			c.ExternalDNSName,
-			subnetRefs,
-			c.HostedZoneID,
-			c.RecordSetTTL,
-			c.Controller.LoadBalancer.Private,
-		)
-	}
-
 	return nil
 }
 
 func (c *Cluster) ConsumeDeprecatedKeys() {
 	// TODO Remove in v0.9.9-rc.1
 	if c.DeprecatedVPCID != "" {
-		fmt.Println("WARN: vpcId is deprecated and will be removed in v0.9.9. Please use vpc.id instead")
+		logger.Warn("vpcId is deprecated and will be removed in v0.9.9. Please use vpc.id instead")
 		c.VPC.ID = c.DeprecatedVPCID
 	}
 
 	if c.DeprecatedInternetGatewayID != "" {
-		fmt.Println("WARN: internetGatewayId is deprecated and will be removed in v0.9.9. Please use internetGateway.id instead")
+		logger.Warn("internetGatewayId is deprecated and will be removed in v0.9.9. Please use internetGateway.id instead")
 		c.InternetGateway.ID = c.DeprecatedInternetGatewayID
 	}
 }
@@ -415,6 +423,31 @@ func (c *Cluster) SetDefaults() error {
 		return fmt.Errorf("You can not mix private and public subnets for etcd nodes. Please explicitly configure etcd.subnets[] to contain either public or private subnets only")
 	}
 
+	if c.ExternalDNSName != "" {
+		// TODO: Deprecate externalDNSName?
+
+		if len(c.APIEndpointConfigs) != 0 {
+			return errors.New("invalid cluster: you can only specify either externalDNSName or apiEndpoints, but not both")
+		}
+
+		subnetRefs := []model.SubnetReference{}
+		for _, s := range c.Controller.LoadBalancer.Subnets {
+			subnetRefs = append(subnetRefs, model.SubnetReference{Name: s.Name})
+		}
+
+		c.APIEndpointConfigs = model.NewDefaultAPIEndpoints(
+			c.ExternalDNSName,
+			subnetRefs,
+			c.HostedZoneID,
+			c.RecordSetTTL,
+			c.Controller.LoadBalancer.Private,
+		)
+	}
+
+	if c.Addons.MetricsServer.Enabled {
+		c.Addons.APIServerAggregator.Enabled = true
+	}
+
 	return nil
 }
 
@@ -436,6 +469,8 @@ type KubeClusterSettings struct {
 	// Required by kubelet to locate the cluster-internal dns hosted on controller nodes in the base cluster
 	DNSServiceIP string `yaml:"dnsServiceIP,omitempty"`
 	UseCalico    bool   `yaml:"useCalico,omitempty"`
+	PodCIDR      string `yaml:"podCIDR,omitempty"`
+	ServiceCIDR  string `yaml:"serviceCIDR,omitempty"`
 }
 
 // Part of configuration which can't be provided via user input but is computed from user input
@@ -469,39 +504,40 @@ type DeploymentSettings struct {
 	DeprecatedInternetGatewayID           string                `yaml:"internetGatewayId,omitempty"`
 	InternetGateway                       model.InternetGateway `yaml:"internetGateway,omitempty"`
 	// Required for validations like e.g. if instance cidr is contained in vpc cidr
-	VPCCIDR                 string            `yaml:"vpcCIDR,omitempty"`
-	InstanceCIDR            string            `yaml:"instanceCIDR,omitempty"`
-	K8sVer                  string            `yaml:"kubernetesVersion,omitempty"`
-	ContainerRuntime        string            `yaml:"containerRuntime,omitempty"`
-	KMSKeyARN               string            `yaml:"kmsKeyArn,omitempty"`
-	StackTags               map[string]string `yaml:"stackTags,omitempty"`
-	Subnets                 model.Subnets     `yaml:"subnets,omitempty"`
-	EIPAllocationIDs        []string          `yaml:"eipAllocationIDs,omitempty"`
-	ElasticFileSystemID     string            `yaml:"elasticFileSystemId,omitempty"`
-	SharedPersistentVolume  bool              `yaml:"sharedPersistentVolume,omitempty"`
-	SSHAuthorizedKeys       []string          `yaml:"sshAuthorizedKeys,omitempty"`
-	Addons                  model.Addons      `yaml:"addons"`
-	Experimental            Experimental      `yaml:"experimental"`
-	Kubelet                 Kubelet           `yaml:"kubelet"`
-	ManageCertificates      bool              `yaml:"manageCertificates,omitempty"`
-	WaitSignal              WaitSignal        `yaml:"waitSignal"`
-	CloudWatchLogging       `yaml:"cloudWatchLogging,omitempty"`
-	AmazonSsmAgent          `yaml:"amazonSsmAgent,omitempty"`
-	CloudFormationStreaming bool `yaml:"cloudFormationStreaming,omitempty"`
-	KubeProxy               `yaml:"kubeProxy,omitempty"`
-	KubeDns                 `yaml:"kubeDns,omitempty"`
-	KubernetesDashboard     `yaml:"kubernetesDashboard,omitempty"`
+	VPCCIDR                   string `yaml:"vpcCIDR,omitempty"`
+	InstanceCIDR              string `yaml:"instanceCIDR,omitempty"`
+	K8sVer                    string `yaml:"kubernetesVersion,omitempty"`
+	KubeAWSVersion            string
+	ContainerRuntime          string            `yaml:"containerRuntime,omitempty"`
+	KMSKeyARN                 string            `yaml:"kmsKeyArn,omitempty"`
+	StackTags                 map[string]string `yaml:"stackTags,omitempty"`
+	Subnets                   model.Subnets     `yaml:"subnets,omitempty"`
+	EIPAllocationIDs          []string          `yaml:"eipAllocationIDs,omitempty"`
+	ElasticFileSystemID       string            `yaml:"elasticFileSystemId,omitempty"`
+	SharedPersistentVolume    bool              `yaml:"sharedPersistentVolume,omitempty"`
+	SSHAuthorizedKeys         []string          `yaml:"sshAuthorizedKeys,omitempty"`
+	Addons                    model.Addons      `yaml:"addons"`
+	Experimental              Experimental      `yaml:"experimental"`
+	Kubelet                   Kubelet           `yaml:"kubelet"`
+	ManageCertificates        bool              `yaml:"manageCertificates,omitempty"`
+	WaitSignal                WaitSignal        `yaml:"waitSignal"`
+	CloudWatchLogging         `yaml:"cloudWatchLogging,omitempty"`
+	AmazonSsmAgent            `yaml:"amazonSsmAgent,omitempty"`
+	CloudFormationStreaming   bool `yaml:"cloudFormationStreaming,omitempty"`
+	KubeProxy                 `yaml:"kubeProxy,omitempty"`
+	KubeDns                   `yaml:"kubeDns,omitempty"`
+	KubeSystemNamespaceLabels map[string]string `yaml:"kubeSystemNamespaceLabels,omitempty"`
+	KubernetesDashboard       `yaml:"kubernetesDashboard,omitempty"`
 	// Images repository
-	HyperkubeImage model.Image `yaml:"hyperkubeImage,omitempty"`
-	AWSCliImage    model.Image `yaml:"awsCliImage,omitempty"`
-
+	HyperkubeImage                     model.Image `yaml:"hyperkubeImage,omitempty"`
+	AWSCliImage                        model.Image `yaml:"awsCliImage,omitempty"`
 	CalicoNodeImage                    model.Image `yaml:"calicoNodeImage,omitempty"`
 	CalicoCniImage                     model.Image `yaml:"calicoCniImage,omitempty"`
 	CalicoCtlImage                     model.Image `yaml:"calicoCtlImage,omitempty"`
 	CalicoKubeControllersImage         model.Image `yaml:"calicoKubeControllersImage,omitempty"`
 	ClusterAutoscalerImage             model.Image `yaml:"clusterAutoscalerImage,omitempty"`
 	ClusterProportionalAutoscalerImage model.Image `yaml:"clusterProportionalAutoscalerImage,omitempty"`
-	KIAMImage                          model.Image `yaml:"kiamImage,omitempty"`
+	CoreDnsImage                       model.Image `yaml:"coreDnsImage,omitempty"`
 	Kube2IAMImage                      model.Image `yaml:"kube2iamImage,omitempty"`
 	KubeDnsImage                       model.Image `yaml:"kubeDnsImage,omitempty"`
 	KubeDnsMasqImage                   model.Image `yaml:"kubeDnsMasqImage,omitempty"`
@@ -518,6 +554,7 @@ type DeploymentSettings struct {
 	FlannelImage                       model.Image `yaml:"flannelImage,omitempty"`
 	JournaldCloudWatchLogsImage        model.Image `yaml:"journaldCloudWatchLogsImage,omitempty"`
 	Kubernetes                         Kubernetes  `yaml:"kubernetes,omitempty"`
+	HostOS                             HostOS      `yaml:"hostOS,omitempty"`
 }
 
 // Part of configuration which is specific to worker nodes
@@ -543,11 +580,6 @@ type EtcdSettings struct {
 	model.Etcd `yaml:"etcd,omitempty"`
 }
 
-// Part of configuration which is specific to flanneld
-type FlannelSettings struct {
-	PodCIDR string `yaml:"podCIDR,omitempty"`
-}
-
 // Cluster is the container of all the configurable parameters of a kube-aws cluster, customizable via cluster.yaml
 type Cluster struct {
 	KubeClusterSettings     `yaml:",inline"`
@@ -555,15 +587,14 @@ type Cluster struct {
 	DefaultWorkerSettings   `yaml:",inline"`
 	ControllerSettings      `yaml:",inline"`
 	EtcdSettings            `yaml:",inline"`
-	FlannelSettings         `yaml:",inline"`
 	AdminAPIEndpointName    string              `yaml:"adminAPIEndpointName,omitempty"`
-	ServiceCIDR             string              `yaml:"serviceCIDR,omitempty"`
 	RecordSetTTL            int                 `yaml:"recordSetTTL,omitempty"`
 	TLSCADurationDays       int                 `yaml:"tlsCADurationDays,omitempty"`
 	TLSCertDurationDays     int                 `yaml:"tlsCertDurationDays,omitempty"`
 	HostedZoneID            string              `yaml:"hostedZoneId,omitempty"`
 	PluginConfigs           model.PluginConfigs `yaml:"kubeAwsPlugins,omitempty"`
 	ProvidedEncryptService  EncryptService
+	ProvidedCFInterrogator  cfnstack.CFInterrogator
 	ProvidedEC2Interrogator cfnstack.EC2Interrogator
 	// SSHAccessAllowedSourceCIDRs is network ranges of sources you'd like SSH accesses to be allowed from, in CIDR notation
 	SSHAccessAllowedSourceCIDRs model.CIDRRanges       `yaml:"sshAccessAllowedSourceCIDRs,omitempty"`
@@ -573,7 +604,9 @@ type Cluster struct {
 
 // Kubelet options
 type Kubelet struct {
-	RotateCerts RotateCerts `yaml:"rotateCerts"`
+	RotateCerts             RotateCerts `yaml:"rotateCerts"`
+	SystemReservedResources string      `yaml:"systemReserved"`
+	KubeReservedResources   string      `yaml:"kubeReserved"`
 }
 
 type Experimental struct {
@@ -588,9 +621,9 @@ type Experimental struct {
 	TLSBootstrap                          TLSBootstrap                   `yaml:"tlsBootstrap"`
 	NodeAuthorizer                        NodeAuthorizer                 `yaml:"nodeAuthorizer"`
 	EphemeralImageStorage                 EphemeralImageStorage          `yaml:"ephemeralImageStorage"`
-        KIAMSupport                           KIAMSupport                    `yaml:"kiamSupport,omitempty"`
+	KIAMSupport                           KIAMSupport                    `yaml:"kiamSupport,omitempty"`
 	Kube2IamSupport                       Kube2IamSupport                `yaml:"kube2IamSupport,omitempty"`
-        GpuSupport                            GpuSupport                     `yaml:"gpuSupport,omitempty"`
+	GpuSupport                            GpuSupport                     `yaml:"gpuSupport,omitempty"`
 	KubeletOpts                           string                         `yaml:"kubeletOpts,omitempty"`
 	LoadBalancer                          LoadBalancer                   `yaml:"loadBalancer"`
 	TargetGroup                           TargetGroup                    `yaml:"targetGroup"`
@@ -652,9 +685,11 @@ type PersistentVolumeClaimResize struct {
 }
 
 type AuditLog struct {
-	Enabled bool   `yaml:"enabled"`
-	MaxAge  int    `yaml:"maxage"`
-	LogPath string `yaml:"logpath"`
+	Enabled   bool   `yaml:"enabled"`
+	LogPath   string `yaml:"logPath"`
+	MaxAge    int    `yaml:"maxAge"`
+	MaxBackup int    `yaml:"maxBackup"`
+	MaxSize   int    `yaml:"maxSize"`
 }
 
 type Authentication struct {
@@ -673,6 +708,10 @@ type AwsEnvironment struct {
 }
 
 type AwsNodeLabels struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+type EncryptionAtRest struct {
 	Enabled bool `yaml:"enabled"`
 }
 
@@ -695,7 +734,17 @@ type EphemeralImageStorage struct {
 }
 
 type KIAMSupport struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled         bool                `yaml:"enabled"`
+	Image           model.Image         `yaml:"image,omitempty"`
+	SessionDuration string              `yaml:"sessionDuration,omitempty"`
+	ServerAddresses KIAMServerAddresses `yaml:"serverAddresses,omitempty"`
+	ServerResources ComputeResources    `yaml:"serverResources,omitempty"`
+	AgentResources  ComputeResources    `yaml:"agentResources,omitempty"`
+}
+
+type KIAMServerAddresses struct {
+	ServerAddress string `yaml:"serverAddress,omitempty"`
+	AgentAddress  string `yaml:"agentAddress,omitempty"`
 }
 
 type Kube2IamSupport struct {
@@ -732,7 +781,23 @@ type LocalStreaming struct {
 }
 
 type Kubernetes struct {
-	Networking Networking `yaml:"networking,omitempty"`
+	EncryptionAtRest  EncryptionAtRest  `yaml:"encryptionAtRest"`
+	Networking        Networking        `yaml:"networking,omitempty"`
+	ControllerManager ControllerManager `yaml:"controllerManager,omitempty"`
+}
+
+type ControllerManager struct {
+	ComputeResources ComputeResources `yaml:"resources,omitempty"`
+}
+
+type ComputeResources struct {
+	Requests ResourceQuota `yaml:"requests,omitempty"`
+	Limits   ResourceQuota `yaml:"limits,omitempty"`
+}
+
+type ResourceQuota struct {
+	Cpu    string `yaml:"cpu"`
+	Memory string `yaml:"memory"`
 }
 
 type Networking struct {
@@ -748,6 +813,11 @@ type SelfHosting struct {
 	FlannelImage    model.Image `yaml:"flannelImage"`
 	FlannelCniImage model.Image `yaml:"flannelCniImage"`
 	TyphaImage      model.Image `yaml:"typhaImage"`
+}
+
+type HostOS struct {
+	BashPrompt model.BashPrompt `yaml:"bashPrompt,omitempty"`
+	MOTDBanner model.MOTDBanner `yaml:"motdBanner,omitempty"`
 }
 
 func (c *LocalStreaming) Interval() int64 {
@@ -792,6 +862,7 @@ type KubeDnsAutoscaler struct {
 }
 
 type KubeDns struct {
+	Provider            string            `yaml:"provider"`
 	NodeLocalResolver   bool              `yaml:"nodeLocalResolver"`
 	DeployToControllers bool              `yaml:"deployToControllers"`
 	Autoscaler          KubeDnsAutoscaler `yaml:"autoscaler"`
@@ -805,8 +876,10 @@ func (c *KubeDns) MergeIfEmpty(other KubeDns) {
 }
 
 type KubernetesDashboard struct {
-	AdminPrivileges bool `yaml:"adminPrivileges"`
-	InsecureLogin   bool `yaml:"insecureLogin"`
+	AdminPrivileges  bool             `yaml:"adminPrivileges"`
+	InsecureLogin    bool             `yaml:"insecureLogin"`
+	Enabled          bool             `yaml:"enabled"`
+	ComputeResources ComputeResources `yaml:"resources,omitempty"`
 }
 
 type WaitSignal struct {
@@ -839,6 +912,15 @@ var supportedReleaseChannels = map[string]bool{
 	"alpha":  true,
 	"beta":   true,
 	"stable": true,
+}
+
+func (c DeploymentSettings) ApiServerLeaseEndpointReconciler() (bool, error) {
+	constraint, err := semver.NewConstraint(">= 1.9")
+	if err != nil {
+		return false, fmt.Errorf("[BUG] .ApiServerLeaseEndpointReconciler min version could not be parsed")
+	}
+	version, _ := semver.NewVersion(c.K8sVer) // already validated in Validate()
+	return constraint.Check(version), nil
 }
 
 func (c ControllerSettings) MinControllerCount() int {
@@ -959,7 +1041,7 @@ type StackTemplateOptions struct {
 	SkipWait              bool
 }
 
-func (c Cluster) StackConfig(opts StackTemplateOptions, extra ...[]*pluginmodel.Plugin) (*StackConfig, error) {
+func (c Cluster) StackConfig(stackName string, opts StackTemplateOptions, session *session.Session, extra ...[]*pluginmodel.Plugin) (*StackConfig, error) {
 	plugins := []*pluginmodel.Plugin{}
 	if len(extra) > 0 {
 		plugins = extra[0]
@@ -967,6 +1049,7 @@ func (c Cluster) StackConfig(opts StackTemplateOptions, extra ...[]*pluginmodel.
 
 	var err error
 	stackConfig := StackConfig{
+		StackName:         stackName,
 		ExtraCfnResources: map[string]interface{}{},
 	}
 
@@ -977,11 +1060,8 @@ func (c Cluster) StackConfig(opts StackTemplateOptions, extra ...[]*pluginmodel.
 	var compactAssets *CompactAssets
 
 	if c.AssetsEncryptionEnabled() {
-		compactAssets, err = ReadOrCreateCompactAssets(opts.AssetsDir, c.ManageCertificates, c.Experimental.TLSBootstrap.Enabled, c.Experimental.KIAMSupport.Enabled, KMSConfig{
-			Region:         stackConfig.Config.Region,
-			KMSKeyARN:      c.KMSKeyARN,
-			EncryptService: c.ProvidedEncryptService,
-		})
+		kmsConfig := NewKMSConfig(c.KMSKeyARN, c.ProvidedEncryptService, session)
+		compactAssets, err = ReadOrCreateCompactAssets(opts.AssetsDir, c.ManageCertificates, c.Experimental.TLSBootstrap.Enabled, c.Experimental.KIAMSupport.Enabled, kmsConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -1007,19 +1087,6 @@ func (c Cluster) StackConfig(opts StackTemplateOptions, extra ...[]*pluginmodel.
 	return &stackConfig, nil
 }
 
-type InitialConfig struct {
-	AmiId            string
-	AvailabilityZone string
-	ClusterName      string
-	ExternalDNSName  string
-	HostedZoneID     string
-	KMSKeyARN        string
-	KeyName          string
-	NoRecordSet      bool
-	Region           model.Region
-	S3URI            string
-}
-
 // Config contains configuration parameters available when rendering userdata injected into a controller or an etcd node from golang text templates
 type Config struct {
 	Cluster
@@ -1037,14 +1104,6 @@ type Config struct {
 
 	APIServerVolumes pluginmodel.APIServerVolumes
 	APIServerFlags   pluginmodel.APIServerFlags
-}
-
-// StackName returns the logical name of a CloudFormation stack resource in a root stack template
-// This is not needed to be unique in an AWS account because the actual name of a nested stack is generated randomly
-// by CloudFormation by including the logical name.
-// This is NOT intended to be used to reference stack name from cloud-config as the target of awscli or cfn-bootstrap-tools commands e.g. `cfn-init` and `cfn-signal`
-func (c Cluster) StackName() string {
-	return "control-plane"
 }
 
 func (c Cluster) StackNameEnvFileName() string {
@@ -1071,7 +1130,7 @@ func (c Config) VPCLogicalName() (string, error) {
 }
 
 func (c Config) VPCID() (string, error) {
-	fmt.Println("WARN: .VPCID in stack template is deprecated and will be removed in v0.9.9. Please use .VPC.ID instead")
+	logger.Warn(".VPCID in stack template is deprecated and will be removed in v0.9.9. Please use .VPC.ID instead")
 	if !c.VPC.HasIdentifier() {
 		return "", fmt.Errorf("[BUG] .VPCID should not be called in stack template when vpc.id(FromStackOutput) is specified. Use .VPCManaged instead.")
 	}
@@ -1138,16 +1197,13 @@ func (c Cluster) APIAccessAllowedSourceCIDRsForControllerSG() []string {
 	return cidrs
 }
 
-// NestedStackName returns a sanitized name of this control-plane which is usable as a valid cloudformation nested stack name
-func (c Cluster) NestedStackName() string {
-	// Convert stack name into something valid as a cfn resource name or
-	// we'll end up with cfn errors like "Template format error: Resource name test5-controlplane is non alphanumeric"
-	return strings.Title(strings.Replace(c.StackName(), "-", "", -1))
+func (c Cluster) ClusterAutoscalerSupportEnabled() bool {
+	return c.Addons.ClusterAutoscaler.Enabled && c.Experimental.ClusterAutoscalerSupport.Enabled
 }
 
 func (c Cluster) NodeLabels() model.NodeLabels {
 	labels := c.NodeSettings.NodeLabels
-	if c.Addons.ClusterAutoscaler.Enabled {
+	if c.ClusterAutoscalerSupportEnabled() {
 		labels["kube-aws.coreos.com/cluster-autoscaler-supported"] = "true"
 	}
 	return labels
@@ -1230,7 +1286,7 @@ func (c Cluster) validate() error {
 
 	clusterNamePlaceholder := "<my-cluster-name>"
 	nestedStackNamePlaceHolder := "<my-nested-stack-name>"
-	replacer := strings.NewReplacer(clusterNamePlaceholder, "", nestedStackNamePlaceHolder, c.StackName())
+	replacer := strings.NewReplacer(clusterNamePlaceholder, "", nestedStackNamePlaceHolder, ControlPlaneStackName)
 	simulatedLcName := fmt.Sprintf("%s-%s-1N2C4K3LLBEDZ-%sLC-BC2S9P3JG2QD", clusterNamePlaceholder, nestedStackNamePlaceHolder, c.Controller.LogicalName())
 	limit := 63 - len(replacer.Replace(simulatedLcName))
 	if c.Experimental.AwsNodeLabels.Enabled && len(c.ClusterName) > limit {
@@ -1238,15 +1294,15 @@ func (c Cluster) validate() error {
 	}
 
 	if c.Controller.InstanceType == "t2.micro" || c.Etcd.InstanceType == "t2.micro" || c.Controller.InstanceType == "t2.nano" || c.Etcd.InstanceType == "t2.nano" {
-		fmt.Println(`WARNING: instance types "t2.nano" and "t2.micro" are not recommended. See https://github.com/kubernetes-incubator/kube-aws/issues/258 for more information`)
+		logger.Warn(`instance types "t2.nano" and "t2.micro" are not recommended. See https://github.com/kubernetes-incubator/kube-aws/issues/258 for more information`)
 	}
 
 	if len(c.Controller.IAMConfig.Role.Name) > 0 {
-		if e := cfnresource.ValidateStableRoleNameLength(c.Controller.IAMConfig.Role.Name, c.Region.String()); e != nil {
+		if e := cfnresource.ValidateStableRoleNameLength(c.ClusterName, c.Controller.IAMConfig.Role.Name, c.Region.String()); e != nil {
 			return e
 		}
 	} else {
-		if e := cfnresource.ValidateUnstableRoleNameLength(c.ClusterName, c.NestedStackName(), c.Controller.IAMConfig.Role.Name, c.Region.String()); e != nil {
+		if e := cfnresource.ValidateUnstableRoleNameLength(c.ClusterName, naming.FromStackToCfnResource(ControlPlaneStackName), c.Controller.IAMConfig.Role.Name, c.Region.String()); e != nil {
 			return e
 		}
 	}
@@ -1321,6 +1377,15 @@ func (c DeploymentSettings) Validate() (*DeploymentValidationResult, error) {
 
 	if c.Region.IsEmpty() {
 		return nil, errors.New("region must be set")
+	}
+
+	_, err := semver.NewVersion(c.K8sVer)
+	if err != nil {
+		return nil, errors.New("kubernetesVersion must be a valid version")
+	}
+
+	if c.KMSKeyARN != "" && !c.Region.IsEmpty() && !strings.Contains(c.KMSKeyARN, c.Region.String()) {
+		return nil, errors.New("kmsKeyArn must reference the same region as the one being deployed to")
 	}
 
 	_, vpcNet, err := net.ParseCIDR(c.VPCCIDR)
@@ -1415,7 +1480,7 @@ func (c DeploymentSettings) Validate() (*DeploymentValidationResult, error) {
 		}
 	}
 
-	if err := c.Experimental.Validate(); err != nil {
+	if err := c.Experimental.Validate("controller"); err != nil {
 		return nil, err
 	}
 
@@ -1568,6 +1633,10 @@ func (e EtcdSettings) Validate() error {
 		return fmt.Errorf("invalid etcd settings: %v", err)
 	}
 
+	if err := e.Etcd.Validate(); err != nil {
+		return err
+	}
+
 	if e.Etcd.Version().Is3() {
 		if e.Etcd.DisasterRecovery.Automated && !e.Etcd.Snapshot.Automated {
 			return errors.New("`etcd.disasterRecovery.automated` is set to true but `etcd.snapshot.automated` is not - automated disaster recovery requires snapshot to be also automated")
@@ -1584,9 +1653,13 @@ func (e EtcdSettings) Validate() error {
 	return nil
 }
 
-func (c Experimental) Validate() error {
+func (c Experimental) Validate(name string) error {
 	if err := c.NodeDrainer.Validate(); err != nil {
 		return err
+	}
+
+	if c.Kube2IamSupport.Enabled && c.KIAMSupport.Enabled {
+		return fmt.Errorf("at '%s', you can enable kube2IamSupport or kiamSupport, but not both", name)
 	}
 
 	return nil

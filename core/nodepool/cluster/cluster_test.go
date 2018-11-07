@@ -92,17 +92,27 @@ func (svc dummyEC2DescribeKeyPairsService) DescribeKeyPairs(input *ec2.DescribeK
 	return output, nil
 }
 
+func clusterRefFromBytes(bytes []byte, main *controlplane.Config) (*ClusterRef, error) {
+	provided, err := config.ClusterFromBytes(bytes, main)
+	if err != nil {
+		return nil, err
+	}
+	c := newClusterRef(provided, nil)
+	return c, nil
+}
+
 func TestValidateKeyPair(t *testing.T) {
 	main, err := controlplane.ConfigFromBytes([]byte(`clusterName: test-cluster
 s3URI: s3://mybucket/mydir
 apiEndpoints:
 - name: public
+  nodePoolRollingStrategy: parallel
   dnsName: test-cluster.example.com
   loadBalancer:
     hostedZone:
       id: hostedzone-xxxx
 keyName: mykey
-kmsKeyArn: mykeyarn
+kmsKeyArn: arn:aws:kms:us-west-1:xxxxxxxxx:key/xxxxxxxxxxxxxxxxxxx
 region: us-west-1
 availabilityZone: us-west-1a
 `))
@@ -110,7 +120,7 @@ availabilityZone: us-west-1a
 		t.Errorf("[bug] failed to initialize test cluster : %v", err)
 	}
 
-	c, err := ClusterRefFromBytes([]byte(minimalYaml), main, false)
+	c, err := clusterRefFromBytes([]byte(minimalYaml), main)
 	if err != nil {
 		t.Errorf("could not get valid cluster config: %v", err)
 	}
@@ -142,7 +152,7 @@ apiEndpoints:
   loadBalancer:
     recordSetManaged: false
 keyName: mykey
-kmsKeyArn: mykeyarn
+kmsKeyArn: arn:aws:kms:us-west-1:xxxxxxxxx:key/xxxxxxxxxxxxxxxxxxx
 region: us-west-1
 availabilityZone: dummy-az-0
 `))
@@ -201,7 +211,7 @@ rootVolume:
 
 	for _, testCase := range testCases {
 		configBody := minimalYaml + testCase.clusterYaml
-		c, err := ClusterRefFromBytes([]byte(configBody), main, false)
+		c, err := clusterRefFromBytes([]byte(configBody), main)
 		if err != nil {
 			t.Errorf("failed to read cluster config: %v", err)
 		}
@@ -227,7 +237,7 @@ keyName: test-key-name
 region: us-west-1
 clusterName: test-cluster-name
 s3URI: s3://mybucket/mydir
-kmsKeyArn: "arn:aws:kms:us-west-1:xxxxxxxxx:key/xxxxxxxxxxxxxxxxxxx"
+kmsKeyArn: arn:aws:kms:us-west-1:xxxxxxxxx:key/xxxxxxxxxxxxxxxxxxx
 availabilityZone: us-west-1a
 `
 
@@ -248,11 +258,11 @@ name: pool1
 		var stackTemplateOptions = config.StackTemplateOptions{
 			AssetsDir:             dummyAssetsDir,
 			StackTemplateTmplFile: "../config/templates/stack-template.json",
-			WorkerTmplFile:        "../../controlplane/config/templates/cloud-config-worker",
+			WorkerTmplFile:        "../../nodepool/config/templates/cloud-config-worker",
 			S3URI:                 "s3://test-bucket/foo/bar",
 		}
 
-		cluster, err := NewCluster(clusterConfig, stackTemplateOptions, []*pluginmodel.Plugin{}, false)
+		cluster, err := NewCluster(clusterConfig, stackTemplateOptions, []*pluginmodel.Plugin{}, nil)
 		if !assert.NoError(t, err) {
 			return
 		}

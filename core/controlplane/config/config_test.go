@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/kubernetes-incubator/kube-aws/model"
@@ -981,6 +982,68 @@ experimental:
 
 }
 
+func TestEncryptionAtRestConfig(t *testing.T) {
+
+	validConfigs := []struct {
+		conf             string
+		encryptionAtRest EncryptionAtRest
+	}{
+		{
+			conf: `
+`,
+			encryptionAtRest: EncryptionAtRest{
+				Enabled: false,
+			},
+		},
+		{
+			conf: `
+kubernetes:
+  encryptionAtRest:
+    enabled: false
+`,
+			encryptionAtRest: EncryptionAtRest{
+				Enabled: false,
+			},
+		},
+		{
+			conf: `
+kubernetes:
+  encryptionAtRest:
+    enabled: true
+`,
+			encryptionAtRest: EncryptionAtRest{
+				Enabled: true,
+			},
+		},
+		{
+			conf: `
+# Settings for an experimental feature must be under the "experimental" field. Ignored.
+encryptionAtRest:
+  enabled: true
+`,
+			encryptionAtRest: EncryptionAtRest{
+				Enabled: false,
+			},
+		},
+	}
+
+	for _, conf := range validConfigs {
+		confBody := singleAzConfigYaml + conf.conf
+		c, err := ClusterFromBytes([]byte(confBody))
+		if err != nil {
+			t.Errorf("failed to parse config %s: %v", confBody, err)
+			continue
+		}
+		if !reflect.DeepEqual(c.Kubernetes.EncryptionAtRest, conf.encryptionAtRest) {
+			t.Errorf(
+				"parsed encryption at rest settings %+v does not match config: %s",
+				c.Kubernetes.EncryptionAtRest,
+				confBody,
+			)
+		}
+	}
+}
+
 func TestRotateCerts(t *testing.T) {
 
 	validConfigs := []struct {
@@ -1042,6 +1105,56 @@ rotateCerts:
 	}
 }
 
+func TestKubeletReserved(t *testing.T) {
+
+	validConfigs := []struct {
+		conf           string
+		kubeReserved   string
+		systemReserved string
+	}{
+		{
+			conf: `
+`,
+			systemReserved: "",
+			kubeReserved:   "",
+		},
+		{
+			conf: `
+kubelet:
+  kubeReserved: "cpu=100m,memory=100Mi,ephemeral-storage=1Gi"
+  systemReserved: "cpu=200m,memory=200Mi,ephemeral-storage=2Gi"
+`,
+			kubeReserved:   "cpu=100m,memory=100Mi,ephemeral-storage=1Gi",
+			systemReserved: "cpu=200m,memory=200Mi,ephemeral-storage=2Gi",
+		},
+		{
+			conf: `
+kubeReserved: "cpu=100m,memory=100Mi,ephemeral-storage=1Gi"
+systemReserved: "cpu=200m,memory=200Mi,ephemeral-storage=2Gi"
+`,
+			kubeReserved:   "",
+			systemReserved: "",
+		},
+	}
+
+	for _, conf := range validConfigs {
+		confBody := singleAzConfigYaml + conf.conf
+		c, err := ClusterFromBytes([]byte(confBody))
+		if err != nil {
+			t.Errorf("failed to parse config %s: %v", confBody, err)
+			continue
+		}
+		if !reflect.DeepEqual(c.Kubelet.KubeReservedResources, conf.kubeReserved) || !reflect.DeepEqual(c.Kubelet.SystemReservedResources, conf.systemReserved) {
+			t.Errorf(
+				"parsed KubeReservedResources (%+v) and/or SystemReservedResources (%+v) settings does not match config: %s",
+				c.Kubelet.KubeReservedResources,
+				c.Kubelet.SystemReservedResources,
+				confBody,
+			)
+		}
+	}
+}
+
 func TestKubeDns(t *testing.T) {
 
 	validConfigs := []struct {
@@ -1052,6 +1165,7 @@ func TestKubeDns(t *testing.T) {
 			conf: `
 `,
 			kubeDns: KubeDns{
+				Provider:            "kube-dns",
 				NodeLocalResolver:   false,
 				DeployToControllers: false,
 				Autoscaler: KubeDnsAutoscaler{
@@ -1068,6 +1182,7 @@ kubeDns:
   deployToControllers: false
 `,
 			kubeDns: KubeDns{
+				Provider:            "kube-dns",
 				NodeLocalResolver:   false,
 				DeployToControllers: false,
 				Autoscaler: KubeDnsAutoscaler{
@@ -1088,12 +1203,29 @@ kubeDns:
     min: 15
 `,
 			kubeDns: KubeDns{
+				Provider:            "kube-dns",
 				NodeLocalResolver:   true,
 				DeployToControllers: true,
 				Autoscaler: KubeDnsAutoscaler{
 					CoresPerReplica: 5,
 					NodesPerReplica: 10,
 					Min:             15,
+				},
+			},
+		},
+		{
+			conf: `
+kubeDns:
+  provider: coredns
+`,
+			kubeDns: KubeDns{
+				Provider:            "coredns",
+				NodeLocalResolver:   false,
+				DeployToControllers: false,
+				Autoscaler: KubeDnsAutoscaler{
+					CoresPerReplica: 256,
+					NodesPerReplica: 16,
+					Min:             2,
 				},
 			},
 		},
@@ -1361,6 +1493,187 @@ func TestWithTrailingDot(t *testing.T) {
 				expected,
 				actual,
 			)
+		}
+	}
+}
+
+func TestInvalidKubernetesVersion(t *testing.T) {
+	testCases := []string{
+		`
+kubernetesVersion: v1.x.3
+`,
+		`
+kubernetesVersion: v1.10.5yes
+`,
+		`
+kubernetesVersion: $v1.10.5
+`}
+
+	for _, testCase := range testCases {
+		confBody := singleAzConfigYaml + testCase
+		_, err := ClusterFromBytes([]byte(confBody))
+		if err == nil || !strings.Contains(err.Error(), "must be a valid version") {
+			t.Errorf("expected kubernetesVersion to be validated: %s\n%s", err, confBody)
+
+		}
+	}
+}
+
+func TestValidKubernetesVersion(t *testing.T) {
+	testCases := []string{
+		`
+kubernetesVersion: v1.10.5
+`,
+		`
+kubernetesVersion: v1.7.2
+`}
+
+	for _, testCase := range testCases {
+		confBody := singleAzConfigYaml + testCase
+		_, err := ClusterFromBytes([]byte(confBody))
+		if err != nil {
+			t.Errorf("expected kubernetesVersion to be validated: %s\n%s", err, confBody)
+		}
+	}
+}
+
+func TestApiServerLeaseEndpointReconcilerDisabled(t *testing.T) {
+	testCases := []string{
+		`
+kubernetesVersion: v1.7.16
+`,
+		`
+kubernetesVersion: v1.8.12
+`}
+
+	for _, testCase := range testCases {
+		confBody := singleAzConfigYaml + testCase
+		c, _ := ClusterFromBytes([]byte(confBody))
+		if enabled, err := c.ApiServerLeaseEndpointReconciler(); enabled == true || err != nil {
+			t.Errorf("API server lease endpoint should not be enabled prior to Kubernetes 1.9: %s\n%s", err, confBody)
+		}
+	}
+}
+func TestApiServerLeaseEndpointReconcilerEnabled(t *testing.T) {
+	testCases := []string{
+		`
+kubernetesVersion: v1.10.5
+`,
+		`
+kubernetesVersion: v1.10.2
+`}
+
+	for _, testCase := range testCases {
+		confBody := singleAzConfigYaml + testCase
+		c, _ := ClusterFromBytes([]byte(confBody))
+		if enabled, err := c.ApiServerLeaseEndpointReconciler(); enabled == false || err != nil {
+			t.Errorf("API server lease endpoint should be enabled at Kubernetes 1.9 or greater: %s\n%s", err, confBody)
+		}
+	}
+}
+
+func TestKube2IamKiamClash(t *testing.T) {
+	config := `
+experimental:
+  kube2IamSupport:
+    enabled: true
+  kiamSupport:
+    enabled: true
+`
+	confBody := singleAzConfigYaml + config
+	_, err := ClusterFromBytes([]byte(confBody))
+	if err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Errorf("expected config to cause error as kube2iam and kiam cannot be enabled together: %s\n%s", err, confBody)
+	}
+}
+func TestKMSArnValidateRegion(t *testing.T) {
+	config := `keyName: test-key-name
+s3URI: s3://mybucket/mydir
+region: us-west-1
+clusterName: test-cluster-name
+kmsKeyArn: "arn:aws:kms:eu-west-1:xxxxxxxxx:key/xxxxxxxxxxxxxxxxxxx"
+`
+	confBody := config + externalDNSNameConfig + availabilityZoneConfig
+
+	_, err := ClusterFromBytes([]byte(confBody))
+	if err == nil || !strings.Contains(err.Error(), "same region") {
+		t.Errorf("Expecting validation error for mismatching KMS key ARN and region config: %s\n%s", err, confBody)
+	}
+}
+func TestClusterAutoscalerDisabled(t *testing.T) {
+	disabledConfigs := []string{
+		`
+addons:
+  clusterAutoscaler:
+    enabled: false
+experimental:
+  clusterAutoscalerSupport:
+    enabled: true
+`,
+		`
+addons:
+  clusterAutoscaler:
+    enabled: true
+experimental:
+  clusterAutoscalerSupport:
+    enabled: false
+`}
+
+	for _, testCase := range disabledConfigs {
+		confBody := singleAzConfigYaml + testCase
+		c, err := ClusterFromBytes([]byte(confBody))
+		if err != nil {
+			t.Errorf("failed to parse config %s: %v", confBody, err)
+		}
+
+		for label, _ := range c.NodeLabels() {
+			if label == "kube-aws.coreos.com/cluster-autoscaler-supported" {
+				t.Errorf("Controllers should not be labelled for autoscaler with config: %s", confBody)
+			}
+		}
+
+		if c.ClusterAutoscalerSupportEnabled() {
+			t.Errorf("Controllers should not have autoscaling enabled with config: %s", confBody)
+		}
+	}
+}
+
+func TestClusterAutoscalerEnabled(t *testing.T) {
+	enabledConfigs := []string{
+		`
+addons:
+  clusterAutoscaler:
+    enabled: true
+experimental:
+  clusterAutoscalerSupport:
+    enabled: true
+`,
+		// `experimental.clusterAutoscalerSupport.enabled` should default to true
+		`
+addons:
+  clusterAutoscaler:
+    enabled: true
+`}
+
+	for _, testCase := range enabledConfigs {
+		confBody := singleAzConfigYaml + testCase
+		c, err := ClusterFromBytes([]byte(confBody))
+		if err != nil {
+			t.Errorf("failed to parse config %s: %v", confBody, err)
+		}
+
+		found := false
+		for label, _ := range c.NodeLabels() {
+			if label == "kube-aws.coreos.com/cluster-autoscaler-supported" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("Controllers should be labelled for autoscaler with config: %s", confBody)
+		}
+
+		if !c.ClusterAutoscalerSupportEnabled() {
+			t.Errorf("Controllers should have autoscaling enabled with config: %s", confBody)
 		}
 	}
 }

@@ -13,12 +13,26 @@ type DummyCloudformationService struct {
 	StackStatus  string
 }
 
-type DummyEC2Interrogator struct {
-	DescribeSubnetsOutput *ec2.DescribeSubnetsOutput
+// DummyCFInterrogator is used to prevent calls to AWS - always returns empty results.
+type DummyCFInterrogator struct {
+	ListStacksResult          *cloudformation.ListStacksOutput
+	ListStacksResourcesResult *cloudformation.ListStackResourcesOutput
 }
 
-func (ec DummyEC2Interrogator) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
-	return ec.DescribeSubnetsOutput, nil
+func (cf DummyCFInterrogator) ListStacks(input *cloudformation.ListStacksInput) (*cloudformation.ListStacksOutput, error) {
+	return cf.ListStacksResult, nil
+}
+
+func (cf DummyCFInterrogator) ListStackResources(input *cloudformation.ListStackResourcesInput) (*cloudformation.ListStackResourcesOutput, error) {
+	return cf.ListStacksResourcesResult, nil
+}
+
+type DummyEC2Interrogator struct {
+	DescribeInstancesOutput *ec2.DescribeInstancesOutput
+}
+
+func (ec DummyEC2Interrogator) DescribeInstances(input *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
+	return ec.DescribeInstancesOutput, nil
 }
 
 func (cfSvc *DummyCloudformationService) CreateStack(req *cloudformation.CreateStackInput) (*cloudformation.CreateStackOutput, error) {
