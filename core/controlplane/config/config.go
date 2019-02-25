@@ -195,6 +195,7 @@ func NewDefaultCluster() *Cluster {
 						FlannelImage:    model.Image{Repo: "quay.io/coreos/flannel", Tag: kubeNetworkingSelfHostingDefaultFlannelImageTag, RktPullDocker: false},
 						FlannelCniImage: model.Image{Repo: "quay.io/coreos/flannel-cni", Tag: kubeNetworkingSelfHostingDefaultFlannelCniImageTag, RktPullDocker: false},
 						TyphaImage:      model.Image{Repo: "quay.io/calico/typha", Tag: kubeNetworkingSelfHostingDefaultTyphaImageTag, RktPullDocker: false},
+						Resources:       NetworkingDaemonsetResources{Limits: model.PodResources{Cpu: "100m", Memory: "50Mi"}, Requests: model.PodResources{Cpu: "100m", Memory: "50Mi"}},
 					},
 				},
 			},
@@ -588,9 +589,9 @@ type Experimental struct {
 	TLSBootstrap                          TLSBootstrap                   `yaml:"tlsBootstrap"`
 	NodeAuthorizer                        NodeAuthorizer                 `yaml:"nodeAuthorizer"`
 	EphemeralImageStorage                 EphemeralImageStorage          `yaml:"ephemeralImageStorage"`
-        KIAMSupport                           KIAMSupport                    `yaml:"kiamSupport,omitempty"`
+	KIAMSupport                           KIAMSupport                    `yaml:"kiamSupport,omitempty"`
 	Kube2IamSupport                       Kube2IamSupport                `yaml:"kube2IamSupport,omitempty"`
-        GpuSupport                            GpuSupport                     `yaml:"gpuSupport,omitempty"`
+	GpuSupport                            GpuSupport                     `yaml:"gpuSupport,omitempty"`
 	KubeletOpts                           string                         `yaml:"kubeletOpts,omitempty"`
 	LoadBalancer                          LoadBalancer                   `yaml:"loadBalancer"`
 	TargetGroup                           TargetGroup                    `yaml:"targetGroup"`
@@ -740,14 +741,20 @@ type Networking struct {
 }
 
 type SelfHosting struct {
-	Enabled         bool        `yaml:"enabled"`
-	Type            string      `yaml:"type"`
-	Typha           bool        `yaml:"typha"`
-	CalicoNodeImage model.Image `yaml:"calicoNodeImage"`
-	CalicoCniImage  model.Image `yaml:"calicoCniImage"`
-	FlannelImage    model.Image `yaml:"flannelImage"`
-	FlannelCniImage model.Image `yaml:"flannelCniImage"`
-	TyphaImage      model.Image `yaml:"typhaImage"`
+	Enabled         bool                         `yaml:"enabled"`
+	Type            string                       `yaml:"type"`
+	Typha           bool                         `yaml:"typha"`
+	CalicoNodeImage model.Image                  `yaml:"calicoNodeImage"`
+	CalicoCniImage  model.Image                  `yaml:"calicoCniImage"`
+	FlannelImage    model.Image                  `yaml:"flannelImage"`
+	FlannelCniImage model.Image                  `yaml:"flannelCniImage"`
+	TyphaImage      model.Image                  `yaml:"typhaImage"`
+	Resources       NetworkingDaemonsetResources `yaml:"resources"`
+}
+
+type NetworkingDaemonsetResources struct {
+	Limits   model.PodResources `yaml:"limits"`
+	Requests model.PodResources `yaml:"requests"`
 }
 
 func (c *LocalStreaming) Interval() int64 {
@@ -1269,6 +1276,12 @@ func (c Cluster) validate() error {
 		}
 		if c.Kubernetes.Networking.SelfHosting.Typha && c.Kubernetes.Networking.SelfHosting.Type != "canal" {
 			return fmt.Errorf("networkingdaemonsets - you can only enable typha when deploying type 'canal'")
+		}
+		if !c.Kubernetes.Networking.SelfHosting.Resources.Requests.IsValid() {
+			return fmt.Errorf("networkingdaemonsets - invalid requests. E.g. valid cpu = 100m memory = 100Mi/Gi")
+		}
+		if !c.Kubernetes.Networking.SelfHosting.Resources.Limits.IsValid() {
+			return fmt.Errorf("networkingdaemonsets - invalid limits. E.g. valid cpu = 100m memory = 100Mi/Gi")
 		}
 	}
 

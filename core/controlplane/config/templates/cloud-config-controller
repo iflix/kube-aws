@@ -1989,11 +1989,11 @@ write_files:
               - --kube-subnet-mgr
               resources:
                 requests:
-                  cpu: "100m"
-                  memory: "50Mi"
+                  cpu: {{ .Kubernetes.Networking.SelfHosting.Resources.Requests.Cpu }}
+                  memory: {{ .Kubernetes.Networking.SelfHosting.Resources.Requests.Memory }}
                 limits:
-                  cpu: "100m"
-                  memory: "50Mi"
+                  cpu: {{ .Kubernetes.Networking.SelfHosting.Resources.Limits.Cpu }}
+                  memory: {{ .Kubernetes.Networking.SelfHosting.Resources.Limits.Memory }}
               securityContext:
                 privileged: true
               env:
