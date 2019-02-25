@@ -3120,6 +3120,9 @@ write_files:
                 - mountPath: /etc/kubernetes/kube-proxy
                   name: kube-proxy-config
                   readOnly: true
+                - mountPath: /run/xtables.lock
+                  name: xtables
+                  readOnly: false
               volumes:
               {{if .KubeProxy.IPVSMode.Enabled -}}
               - name: lib-modules
@@ -3132,6 +3135,9 @@ write_files:
               - name: kube-proxy-config
                 configMap:
                   name: kube-proxy-config
+              - name: xtables
+                hostPath:
+                  path: /run/xtables.lock
 
   - path: /etc/kubernetes/manifests/kube-apiserver.yaml
     content: |
